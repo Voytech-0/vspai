@@ -437,10 +437,6 @@ def test(
         if neptune_run is not None:
             neptune_run.sync()
 
-
-from spai.video_loader import get_frame
-
-
 @cli.command()
 @click.option("--cfg", default="./configs/spai.yaml", show_default=True,
               type=click.Path(exists=True, dir_okay=False, path_type=Path),
@@ -531,10 +527,6 @@ def infer(
     model = build_cls_model(config)
     model.cuda()
     load_pretrained(config, model, logger,  checkpoint_path=model_ckpt, verbose=False)
-
-    if is_video:
-        validate(config, get_frame("spai/cat.mp4"), model, criterion, None, is_video = is_video)
-        return
 
     # Infer predictions and compute performance metrics (only on csv inputs with ground-truths).
     for test_data_loader, test_dataset, test_data_name, input_path in zip(test_loaders,
@@ -1131,12 +1123,6 @@ def validate(
     cls_metrics: metrics.Metrics = metrics.Metrics(metrics=("auc", "ap", "accuracy"))
 
     predicted_scores: dict[int, tuple[float, Optional[AttentionMask]]] = {}
-
-    if is_video:
-        model.to("cpu")
-        out = model(data_loader)
-        print(out)
-        return
 
     end = time.time()
     for idx, (images, target, dataset_idx) in enumerate(data_loader):

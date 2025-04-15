@@ -25,6 +25,7 @@ from PIL import Image
 from torchvision.io import read_image
 
 from spai.data import filestorage
+from spai.data.video_loader import get_frame
 
 
 class DataReader:
@@ -70,13 +71,19 @@ class FileSystemReader(DataReader):
         return contents
 
     def get_image_size(self, path: str) -> tuple[int, int]:
-        with Image.open(self.root_path/path) as image:
-            image_size: tuple[int, int] = image.size
+        image = self.load_image(path, channels=3)
+        image_size: tuple[int, int] = image.size
         return image_size
 
     def load_image(self, path: str, channels: int) -> Image.Image:
         try:
-            image = Image.open(self.root_path/path)
+            # check whether it is a video
+            if path.endswith(".mp4") or path.endswith(".avi"):
+                # read the first frame of the video
+                image = get_frame(str(self.root_path / path))
+            else:
+                # it's an image
+                image = Image.open(self.root_path/path)
             if channels == 1:
                 image = image.convert("L")
             else:
