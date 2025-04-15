@@ -533,7 +533,7 @@ def infer(
     load_pretrained(config, model, logger,  checkpoint_path=model_ckpt, verbose=False)
 
     if is_video:
-        validate(config, get_frame("cat.mp4"), model, criterion, None)
+        validate(config, get_frame("spai/cat.mp4"), model, criterion, None, is_video = is_video)
         return
 
     # Infer predictions and compute performance metrics (only on csv inputs with ground-truths).
@@ -1120,7 +1120,8 @@ def validate(
     criterion,
     neptune_run,
     verbose: bool = True,
-    return_predictions: bool = False
+    return_predictions: bool = False,
+    is_video = False,
 ):
     model.eval()
     criterion.eval()
@@ -1131,7 +1132,7 @@ def validate(
 
     predicted_scores: dict[int, tuple[float, Optional[AttentionMask]]] = {}
 
-    if config.is_video:
+    if is_video:
         model.to("cpu")
         out = model(data_loader)
         print(out)
