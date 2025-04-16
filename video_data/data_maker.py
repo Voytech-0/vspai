@@ -15,7 +15,7 @@ def cli() -> None:
 @click.option('--split', type=click.Choice(['train', 'val', 'test']), default='train')
 def make_csv(data_folder, output_folder, fake, split):
     output_name = 'fake_' if fake else 'real_'
-    output_name += data_folder.split('/')[-1] + '.csv'
+    output_name += data_folder + '.csv'
     # create df with  image,class,split headers
     df = pd.DataFrame(columns=['image', 'class', 'split'])
     class_value = 1 if fake else 0
