@@ -80,7 +80,7 @@ class CSVDataset(torch.utils.data.Dataset):
             raise RuntimeError(f"Unsupported split: {split}")
 
         # Path of the CSV file is expected to be absolute.
-        reader = readers.FileSystemReader(pathlib.Path("/"), self.is_video, self.aggregation)
+        reader = readers.FileSystemReader(pathlib.Path("/"), self.is_video)
         self.entries: list[dict[str, Any]] = reader.read_csv_file(str(self.csv_path))
         self.entries = [e for e in self.entries if e[self.split_column] == self.split]
 
@@ -113,8 +113,9 @@ class CSVDataset(torch.utils.data.Dataset):
             augmented_views: list[torch.Tensor] = []
             for frame in range(self.data_reader.num_frames(self.entries[idx][self.path_column])):
                 img_obj = self.data_reader.load_image(self.entries[idx][self.path_column], channels=3, idx=frame)
-                augmented_views.append(torchvision.transforms.pil_to_tensor(img_obj))
+                augmented_views.append(torchvision.transforms.functional.pil_to_tensor(img_obj))
             augmented_img = torch.stack(augmented_views, dim = 0)
+            label: int = int(self.entries[idx][self.class_column])
 
 
         else:
