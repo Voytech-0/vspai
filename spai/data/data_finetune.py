@@ -53,7 +53,9 @@ class CSVDataset(torch.utils.data.Dataset):
         views: int = 1,
         concatenate_views_horizontally: bool = False,
         lmdb_storage: Optional[pathlib.Path] = None,
-        views_generator: Optional[Callable[[Image.Image], tuple[Image.Image, ...]]] = None
+        views_generator: Optional[Callable[[Image.Image], tuple[Image.Image, ...]]] = None,
+        is_video: bool = False,
+        aggregation: str = "first"
     ):
         super().__init__()
         self.csv_path: pathlib.Path = csv_path
@@ -68,6 +70,8 @@ class CSVDataset(torch.utils.data.Dataset):
             Callable[[Image.Image], tuple[Image.Image, ...]]] = views_generator
         self.concatenate_views_horizontally: bool = concatenate_views_horizontally
         self.lmdb_storage: Optional[pathlib.Path] = lmdb_storage
+        self.is_video = is_video
+        self.aggregation = aggregation
 
         # Reader to be used for data loading. Its creation is deferred
         self.data_reader: Optional[readers.DataReader] = None
@@ -76,7 +80,7 @@ class CSVDataset(torch.utils.data.Dataset):
             raise RuntimeError(f"Unsupported split: {split}")
 
         # Path of the CSV file is expected to be absolute.
-        reader = readers.FileSystemReader(pathlib.Path("/"))
+        reader = readers.FileSystemReader(pathlib.Path("/"), self.is_video, self.aggregation)
         self.entries: list[dict[str, Any]] = reader.read_csv_file(str(self.csv_path))
         self.entries = [e for e in self.entries if e[self.split_column] == self.split]
 
@@ -170,7 +174,7 @@ class CSVDataset(torch.utils.data.Dataset):
 
         if self.lmdb_storage is None:
             self.data_reader: readers.FileSystemReader = readers.FileSystemReader(
-                pathlib.Path(self.csv_root_path)
+                pathlib.Path(self.csv_root_path), self.is_video, self.aggregation
             )
         else:
             self.data_reader: readers.LMDBFileStorageReader = readers.LMDBFileStorageReader(
@@ -543,7 +547,9 @@ def build_dataset(
             split=split_name,
             transform=transform,
             lmdb_storage=pathlib.Path(config.DATA.LMDB_PATH) if config.DATA.LMDB_PATH else None,
-            views_generator=views_generator
+            views_generator=views_generator, 
+            is_video = (config.DATA.TYPE == "video"), 
+            aggregation = config.DATA.AGGREGATION
         )
     num_classes: int = dataset.get_classes_num()
 

@@ -60,9 +60,11 @@ class DataReader:
 
 class FileSystemReader(DataReader):
     """Reader that maps relative paths to absolute paths of the filesystem."""
-    def __init__(self, root_path: pathlib.Path):
+    def __init__(self, root_path: pathlib.Path, is_video: bool, aggregation: str):
         super().__init__()
         self.root_path: pathlib.Path = root_path
+        self.is_video = is_video
+        self.aggregation = aggregation 
 
     def read_csv_file(self, path: str) -> list[dict[str, Any]]:
         with (self.root_path/path).open("r") as f:
@@ -78,9 +80,13 @@ class FileSystemReader(DataReader):
     def load_image(self, path: str, channels: int) -> Image.Image:
         try:
             # check whether it is a video
-            if path.endswith(".mp4") or path.endswith(".avi"):
+            if self.is_video:
+                index = 0
                 # read the first frame of the video
-                image = get_frame(str(self.root_path / path))
+                if self.aggregation == "first":
+                    image = get_frame(str(self.root_path / path), 0)
+                if self.aggregation == "mean":
+                    image = get_frame(str(self.root_path / path), index)
             else:
                 # it's an image
                 image = Image.open(self.root_path/path)

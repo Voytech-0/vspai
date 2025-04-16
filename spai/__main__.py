@@ -477,8 +477,9 @@ def test(
 @click.option("--resize-to", type=int,
               help="When this argument is provided the testing images will be resized "
                    "so that their biggest dimension does not exceed this value.")
+@click.option("--data_type", type=str, default="image")
+@click.option("--aggregation", type=str, default="first") 
 @click.option("--opt", "extra_options", type=(str, str), multiple=True)
-@click.option("--video", "is_video", is_flag=True)
 def infer(
     cfg: Path,
     batch_size: int,
@@ -490,7 +491,8 @@ def infer(
     output: Path,
     tag: str,
     resize_to: Optional[int],
-    is_video: bool, 
+    data_type: str, 
+    aggregation: str,
     extra_options: tuple[str, str],
 ) -> None:
     config = get_config({
@@ -503,7 +505,8 @@ def infer(
         "tag": tag,
         "pretrained": str(model),
         "resize_to": resize_to,
-        "is_video": is_video,
+        "data_type": data_type,
+        "aggregation": aggregation,
         "opts": extra_options
     })
 

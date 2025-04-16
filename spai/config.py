@@ -29,6 +29,10 @@ _C.BASE = ['']
 # Data settings
 # -----------------------------------------------------------------------------
 _C.DATA = CN()
+# Data type - image or video
+_C.DATA.TYPE = "image"
+# Data aggregation for video: "first" for first frame or "mean" for mean along all frames
+_C.DATA.AGGREGATION = "first"
 # Batch size for a single GPU, could be overwritten by command line argument
 _C.DATA.BATCH_SIZE = 128
 # Batch size for validation. If it is set to None, DATA.BATCH_SIZE will be used.
@@ -472,6 +476,10 @@ def update_config(config, args):
         config.PIN_MEMORY = False
     if _check_args("data_prefetch_factor"):
         config.DATA.PREFETCH_FACTOR = args["data_prefetch_factor"]
+    if _check_args("data_type"):
+        config.DATA.TYPE = args["data_type"]
+    if _check_args("aggregation"):
+        config.DATA.AGGREGATION = args["aggregation"]
     # output folder
     config.OUTPUT = os.path.join(config.OUTPUT, config.MODEL.NAME, config.TAG)
 
