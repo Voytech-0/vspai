@@ -25,7 +25,7 @@ from PIL import Image
 from torchvision.io import read_image
 
 from spai.data import filestorage
-from spai.data.video_loader import get_frame
+from spai.data.video_loader import get_frame, get_num_frames
 
 
 class DataReader:
@@ -33,7 +33,7 @@ class DataReader:
     def read_csv_file(self, path: str) -> list[dict[str, Any]]:
         raise NotImplementedError
 
-    def load_image(self, path: str, channels: int) -> Image.Image:
+    def load_image(self, path: str, channels: int, idx: int = 0) -> Image.Image:
         raise NotImplementedError
 
     def get_image_size(self, path: str) -> tuple[int, int]:
@@ -57,14 +57,16 @@ class DataReader:
     def load_file_path_or_stream(self, path: str) -> Union[pathlib.Path, io.FileIO, io.BytesIO]:
         raise NotImplementedError
 
+    def num_frames(self, path: str):
+        return get_num_frames(path)
+
 
 class FileSystemReader(DataReader):
     """Reader that maps relative paths to absolute paths of the filesystem."""
-    def __init__(self, root_path: pathlib.Path, is_video: bool, aggregation: str):
+    def __init__(self, root_path: pathlib.Path, is_video: bool):
         super().__init__()
         self.root_path: pathlib.Path = root_path
         self.is_video = is_video
-        self.aggregation = aggregation 
 
     def read_csv_file(self, path: str) -> list[dict[str, Any]]:
         with (self.root_path/path).open("r") as f:
@@ -77,16 +79,12 @@ class FileSystemReader(DataReader):
         image_size: tuple[int, int] = image.size
         return image_size
 
-    def load_image(self, path: str, channels: int) -> Image.Image:
+    def load_image(self, path: str, channels: int, idx = 0) -> Image.Image:
         try:
             # check whether it is a video
             if self.is_video:
-                index = 0
                 # read the first frame of the video
-                if self.aggregation == "first":
-                    image = get_frame(str(self.root_path / path), 0)
-                if self.aggregation == "mean":
-                    image = get_frame(str(self.root_path / path), index)
+                image = get_frame(str(self.root_path / path), idx)
             else:
                 # it's an image
                 image = Image.open(self.root_path/path)
@@ -147,7 +145,7 @@ class LMDBFileStorageReader(DataReader):
             image_size: tuple[int, int] = image.size
         return image_size
 
-    def load_image(self, path: str, channels: int) -> Image.Image:
+    def load_image(self, path: str, channels: int, idx: int = 0) -> Image.Image:
         stream = self.storage.open_file(path, mode="b")
         with Image.open(stream) as image:
             if channels == 1:

@@ -1116,7 +1116,6 @@ def validate(
     neptune_run,
     verbose: bool = True,
     return_predictions: bool = False,
-    is_video = False,
 ):
     model.eval()
     criterion.eval()
@@ -1159,6 +1158,8 @@ def validate(
                 if config.TEST.VIEWS_REDUCTION_APPROACH == "max":
                     output: torch.Tensor = predictions.max(dim=1).values
                 elif config.TEST.VIEWS_REDUCTION_APPROACH == "mean":
+                    output: torch.Tensor = predictions.mean(dim=1)
+                elif config.DATA.AGGREGATION == "mean":
                     output: torch.Tensor = predictions.mean(dim=1)
                 else:
                     raise TypeError(f"{config.TEST.VIEWS_REDUCTION_APPROACH} is not a "

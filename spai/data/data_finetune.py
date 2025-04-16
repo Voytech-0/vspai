@@ -106,11 +106,23 @@ class CSVDataset(torch.utils.data.Dataset):
         if self.data_reader is None:
             self._create_data_reader()
 
-        # Load sample.
-        img_obj: Image.Image = self.data_reader.load_image(
-            self.entries[idx][self.path_column], channels=3
-        )
-        label: int = int(self.entries[idx][self.class_column])
+        
+
+        if self.is_video and self.aggregation == "mean":
+            # for all frames load image stack together like below
+            augmented_views: list[torch.Tensor] = []
+            for frame in range(self.data_reader.num_frames(self.entries[idx][self.path_column])):
+                img_obj = self.data_reader.load_image(self.entries[idx][self.path_column], channels=3, idx=frame)
+                augmented_views.append(torchvision.transforms.pil_to_tensor(img_obj))
+            augmented_img = torch.stack(augmented_views, dim = 0)
+
+
+        else:
+            # Load sample.
+            img_obj: Image.Image = self.data_reader.load_image(
+                self.entries[idx][self.path_column], channels=3
+            )
+            label: int = int(self.entries[idx][self.class_column])
 
         # Generate multiple views of an image either through a provided views generation
         # function or through multiple augmentations of the image.
@@ -174,7 +186,7 @@ class CSVDataset(torch.utils.data.Dataset):
 
         if self.lmdb_storage is None:
             self.data_reader: readers.FileSystemReader = readers.FileSystemReader(
-                pathlib.Path(self.csv_root_path), self.is_video, self.aggregation
+                pathlib.Path(self.csv_root_path), self.is_video 
             )
         else:
             self.data_reader: readers.LMDBFileStorageReader = readers.LMDBFileStorageReader(
