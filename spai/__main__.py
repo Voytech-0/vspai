@@ -319,6 +319,8 @@ def train(
 @click.option("--resize-to", type=int,
               help="When this argument is provided the testing images will be resized "
                    "so that their biggest dimension does not exceed this value.")
+@click.option("--data_type", type=str, default="image")
+@click.option("--aggregation", type=str, default="first") 
 @click.option("--opt", "extra_options", type=(str, str), multiple=True)
 @click.option("--update-csv", is_flag=True,
               help="When this flag is provided the predicted score for each sample is "
@@ -335,6 +337,8 @@ def test(
     output: Path,
     tag: str,
     resize_to: Optional[int],
+    data_type: str,
+    aggregation: str,
     extra_options: tuple[str, str],
     update_csv: bool
 ) -> None:
@@ -348,6 +352,8 @@ def test(
         "tag": tag,
         "pretrained": str(model),
         "resize_to": resize_to,
+        "data_type": data_type,
+        "aggregation": aggregation,
         "opts": extra_options
     })
 
@@ -1126,8 +1132,13 @@ def validate(
 
     predicted_scores: dict[int, tuple[float, Optional[AttentionMask]]] = {}
 
+
     end = time.time()
     for idx, (images, target, dataset_idx) in enumerate(data_loader):
+        #if config.DATA.AGGREGATION == "mean":
+            #images = images[0] 
+            
+
         if isinstance(images, list):
             # In case of arbitrary resolution models the batch is provided as a list of tensors.
             images = [img.cuda(non_blocking=True) for img in images]
@@ -1146,9 +1157,14 @@ def validate(
             output, attention_masks = model(
                 images, config.MODEL.FEATURE_EXTRACTION_BATCH, export_dirs
             )
-        elif isinstance(images, list):
+        elif isinstance(images, list) and config.DATA.AGGREGATION != "mean":
             output = model(images, config.MODEL.FEATURE_EXTRACTION_BATCH)
             attention_masks = [None] * len(images)
+        elif isinstance(images, list) and config.DATA.AGGREGATION == "mean":
+            predictions: list[list[torch.Tensor]] = [[
+                model(image[:, i]) for i in range(image.size(dim=1))] for image in images]
+            output: torch.Tensor = torch.tensor([torch.stack(prediction, dim = 1).mean(dim=1) for prediction in predictions])
+            output = output.unsqueeze(1).cuda()
         else:
             if images.size(dim=1) > 1:
                 predictions: list[torch.Tensor] = [
@@ -1158,8 +1174,6 @@ def validate(
                 if config.TEST.VIEWS_REDUCTION_APPROACH == "max":
                     output: torch.Tensor = predictions.max(dim=1).values
                 elif config.TEST.VIEWS_REDUCTION_APPROACH == "mean":
-                    output: torch.Tensor = predictions.mean(dim=1)
-                elif config.DATA.AGGREGATION == "mean":
                     output: torch.Tensor = predictions.mean(dim=1)
                 else:
                     raise TypeError(f"{config.TEST.VIEWS_REDUCTION_APPROACH} is not a "

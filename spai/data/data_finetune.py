@@ -113,9 +113,10 @@ class CSVDataset(torch.utils.data.Dataset):
             augmented_views: list[torch.Tensor] = []
             for frame in range(self.data_reader.num_frames(self.entries[idx][self.path_column])):
                 img_obj = self.data_reader.load_image(self.entries[idx][self.path_column], channels=3, idx=frame)
-                augmented_views.append(torchvision.transforms.functional.pil_to_tensor(img_obj))
+                augmented_views.append(torchvision.transforms.functional.pil_to_tensor(img_obj).float())
             augmented_img = torch.stack(augmented_views, dim = 0)
             label: int = int(self.entries[idx][self.class_column])
+            return augmented_img, np.array(label, dtype=float), idx
 
 
         else:
