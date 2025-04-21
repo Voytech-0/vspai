@@ -12,7 +12,7 @@ def cli() -> None:
 @click.option('--data-folder', type=click.Path(exists=True, file_okay=False), required=True)
 @click.option('--output-folder', type=click.Path(file_okay=False), required=False, default='.')
 @click.option('--fake', is_flag=True, default=False)
-@click.option('--split', type=click.Choice(['train', 'val', 'test']), default='train')
+@click.option('--split', type=click.Choice(['train', 'val', 'test']), default='test')
 def make_csv(data_folder, output_folder, fake, split):
     output_name = 'fake_' if fake else 'real_'
     output_name += data_folder + '.csv'
