@@ -42,20 +42,20 @@ from spai import data_utils
 
 class CSVDataset(torch.utils.data.Dataset):
     def __init__(
-        self,
-        csv_path: pathlib.Path,
-        csv_root_path: pathlib.Path,
-        split: str,
-        transform,
-        path_column: str = "image",
-        split_column: str = "split",
-        class_column: str = "class",
-        views: int = 1,
-        concatenate_views_horizontally: bool = False,
-        lmdb_storage: Optional[pathlib.Path] = None,
-        views_generator: Optional[Callable[[Image.Image], tuple[Image.Image, ...]]] = None,
-        is_video: bool = False,
-        aggregation: str = "first"
+            self,
+            csv_path: pathlib.Path,
+            csv_root_path: pathlib.Path,
+            split: str,
+            transform,
+            path_column: str = "image",
+            split_column: str = "split",
+            class_column: str = "class",
+            views: int = 1,
+            concatenate_views_horizontally: bool = False,
+            lmdb_storage: Optional[pathlib.Path] = None,
+            views_generator: Optional[Callable[[Image.Image], tuple[Image.Image, ...]]] = None,
+            is_video: bool = False,
+            aggregation: str = "first"
     ):
         super().__init__()
         self.csv_path: pathlib.Path = csv_path
@@ -106,15 +106,15 @@ class CSVDataset(torch.utils.data.Dataset):
         if self.data_reader is None:
             self._create_data_reader()
 
-        
-
         if self.is_video and self.aggregation == "mean":
             # for all frames load image stack together like below
             augmented_views: list[torch.Tensor] = []
-            for frame in range(self.data_reader.num_frames(str(self.csv_root_path / self.entries[idx][self.path_column]))):
-                img_obj = self.data_reader.load_image(str(self.csv_root_path / self.entries[idx][self.path_column]), channels=3, idx=frame)
+            for frame in range(
+                    self.data_reader.num_frames(str(self.csv_root_path / self.entries[idx][self.path_column]))):
+                img_obj = self.data_reader.load_image(str(self.csv_root_path / self.entries[idx][self.path_column]),
+                                                      channels=3, idx=frame)
                 augmented_views.append(torchvision.transforms.functional.pil_to_tensor(img_obj).float())
-            augmented_img = torch.stack(augmented_views, dim = 0)
+            augmented_img = torch.stack(augmented_views, dim=0)
             label: int = int(self.entries[idx][self.class_column])
             return augmented_img, np.array(label, dtype=float), idx
 
@@ -163,10 +163,10 @@ class CSVDataset(torch.utils.data.Dataset):
             return self.csv_root_path
 
     def update_dataset_csv(
-        self,
-        column_name: str,
-        values: dict[int, Any],
-        export_dir: Optional[pathlib.Path] = None
+            self,
+            column_name: str,
+            values: dict[int, Any],
+            export_dir: Optional[pathlib.Path] = None
     ) -> None:
         for idx, v in values.items():
             self.entries[idx][column_name] = v
@@ -188,7 +188,7 @@ class CSVDataset(torch.utils.data.Dataset):
 
         if self.lmdb_storage is None:
             self.data_reader: readers.FileSystemReader = readers.FileSystemReader(
-                pathlib.Path(self.csv_root_path), self.is_video 
+                pathlib.Path(self.csv_root_path), self.is_video
             )
         else:
             self.data_reader: readers.LMDBFileStorageReader = readers.LMDBFileStorageReader(
@@ -198,15 +198,15 @@ class CSVDataset(torch.utils.data.Dataset):
 
 class CSVDatasetTriplet(torch.utils.data.Dataset):
     def __init__(
-        self,
-        csv_path: pathlib.Path,
-        csv_root_path: pathlib.Path,
-        split: str,
-        transform,
-        path_column: str = "image",
-        split_column: str = "split",
-        class_column: str = "class",
-        lmdb_storage: Optional[pathlib.Path] = None
+            self,
+            csv_path: pathlib.Path,
+            csv_root_path: pathlib.Path,
+            split: str,
+            transform,
+            path_column: str = "image",
+            split_column: str = "split",
+            class_column: str = "class",
+            lmdb_storage: Optional[pathlib.Path] = None
     ):
         super().__init__()
         self.csv_path: pathlib.Path = csv_path
@@ -298,7 +298,7 @@ class CSVDatasetTriplet(torch.utils.data.Dataset):
         for e in self.entries:
             entries_per_class[int(e[self.class_column])].append(e)
 
-        triplets: list[tuple[dict[str,Any], dict[str, Any], dict[str, Any]]] = []
+        triplets: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
         for class_id, class_group in entries_per_class.items():
             class_group: list[dict[str, Any]] = list(class_group)
             rest_groups: list[list[dict[str, Any]]] = list(entries_per_class.values())
@@ -377,7 +377,7 @@ def build_loader_finetune(config, logger):
         num_workers=config.DATA.NUM_WORKERS,
         pin_memory=config.DATA.PIN_MEMORY,
         drop_last=False,
-        prefetch_factor=config.DATA.VAL_PREFETCH_FACTOR  or config.DATA.PREFETCH_FACTOR,
+        prefetch_factor=config.DATA.VAL_PREFETCH_FACTOR or config.DATA.PREFETCH_FACTOR,
         collate_fn=(torch.utils.data.default_collate
                     if not config.MODEL.RESOLUTION_MODE == "arbitrary"
                     else image_enlisting_collate_fn)
@@ -404,10 +404,10 @@ def build_loader_finetune(config, logger):
 
 
 def build_loader_test(
-    config,
-    logger,
-    split: str = "test",
-    dummy_csv_dir: Optional[pathlib.Path] = None,
+        config,
+        logger,
+        split: str = "test",
+        dummy_csv_dir: Optional[pathlib.Path] = None,
 ) -> tuple[list[str], list[torch.utils.data.Dataset], list[torch.utils.data.DataLoader]]:
     # Obtain the root directory for each test input (either a CSV file or a directory).
     input_root_paths: list[pathlib.Path]
@@ -448,7 +448,7 @@ def build_loader_test(
     # Obtain the separate testing sets and their names.
     test_datasets: list[CSVDataset] = []
     test_datasets_names: list[str] = []
-    num_classes_per_dataset: list[int]  = []
+    num_classes_per_dataset: list[int] = []
     for csv_path, csv_root_path in zip(csv_paths, csv_root_paths):
         csv_path: pathlib.Path = pathlib.Path(csv_path)
         dataset: CSVDataset
@@ -487,11 +487,11 @@ def build_loader_test(
 
 
 def build_dataset(
-    csv_path: pathlib.Path,
-    csv_root_dir: pathlib.Path,
-    config,
-    split_name: str,
-    logger,
+        csv_path: pathlib.Path,
+        csv_root_dir: pathlib.Path,
+        config,
+        split_name: str,
+        logger,
 ) -> tuple[Union[CSVDataset, CSVDatasetTriplet], int]:
     if split_name not in ["train", "val", "test"]:
         raise RuntimeError(f"Unsupported split: {split_name}")
@@ -561,9 +561,9 @@ def build_dataset(
             split=split_name,
             transform=transform,
             lmdb_storage=pathlib.Path(config.DATA.LMDB_PATH) if config.DATA.LMDB_PATH else None,
-            views_generator=views_generator, 
-            is_video = (config.DATA.TYPE == "video"), 
-            aggregation = config.DATA.AGGREGATION
+            views_generator=views_generator,
+            is_video=(config.DATA.TYPE == "video"),
+            aggregation=config.DATA.AGGREGATION
         )
     num_classes: int = dataset.get_classes_num()
 
@@ -669,10 +669,10 @@ def build_transform(is_train, config) -> Callable[[np.ndarray], np.ndarray]:
                                        config.TEST.GAUSSIAN_BLUR_KERNEL_SIZE),
                            sigma_limit=0,
                            p=1.0 if config.TEST.GAUSSIAN_BLUR else .0),
-            A.GaussNoise(var_limit=(config.TEST.GAUSSIAN_NOISE_SIGMA**2,
-                                    config.TEST.GAUSSIAN_NOISE_SIGMA**2),
+            A.GaussNoise(var_limit=(config.TEST.GAUSSIAN_NOISE_SIGMA ** 2,
+                                    config.TEST.GAUSSIAN_NOISE_SIGMA ** 2),
                          p=1.0 if config.TEST.GAUSSIAN_NOISE else .0),
-            A.RandomScale(scale_limit=(config.TEST.SCALE_FACTOR-1, config.TEST.SCALE_FACTOR-1),
+            A.RandomScale(scale_limit=(config.TEST.SCALE_FACTOR - 1, config.TEST.SCALE_FACTOR - 1),
                           p=1.0 if config.TEST.SCALE else .0)
         ]
         if config.TEST.MAX_SIZE is not None:
@@ -726,7 +726,7 @@ def unpack_sequence(values: np.ndarray, offsets: np.ndarray, index: int) -> np.n
 
 
 def image_enlisting_collate_fn(
-    batch: Iterable[tuple[torch.Tensor, np.ndarray, int]]
+        batch: Iterable[tuple[torch.Tensor, np.ndarray, int]]
 ) -> tuple[list[torch.Tensor], torch.Tensor, torch.Tensor]:
     """Collate function that enlists its entries."""
     return (
