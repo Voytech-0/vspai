@@ -109,8 +109,8 @@ class CSVDataset(torch.utils.data.Dataset):
         if self.is_video and self.aggregation == "mean":
             # for all frames load image stack together like below
             augmented_views: list[torch.Tensor] = []
-            for frame in range(
-                    self.data_reader.num_frames(str(self.csv_root_path / self.entries[idx][self.path_column]))):
+            frames = [random.sample(range(self.data_reader.num_frames(str(self.csv_root_path / self.entries[idx][self.path_column]))), 5)]
+            for frame in frames:
                 img_obj = self.data_reader.load_image(str(self.csv_root_path / self.entries[idx][self.path_column]),
                                                       channels=3, idx=frame)
                 augmented_views.append(torchvision.transforms.functional.pil_to_tensor(img_obj).float())
