@@ -113,7 +113,16 @@ class CSVDataset(torch.utils.data.Dataset):
             for frame in frames:
                 img_obj = self.data_reader.load_image(str(self.csv_root_path / self.entries[idx][self.path_column]),
                                                       channels=3, idx=frame)
-                augmented_views.append(torchvision.transforms.functional.pil_to_tensor(img_obj).float())
+                tensor_img = torchvision.transforms.functional.pil_to_tensor(img_obj).float()
+                h, w, _ = tensor_img.shape
+                pad_h = max(0, 224 - h)
+                pad_w = max(0, 224 - w)
+                pad_top = pad_h // 2
+                pad_bot = pad_h - pad_top
+                pad_left = pad_w // 2
+                pad_right = pad_w - pad_left
+                tensor_img = torchvision.transforms.functional.pad(tensor_img, (pad_left, pad_right, pad_top, pad_bot)) 
+                augmented_views.append(tensor_img)
             augmented_img = torch.stack(augmented_views, dim=0)
             label: int = int(self.entries[idx][self.class_column])
             return augmented_img, np.array(label, dtype=float), idx
