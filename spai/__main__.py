@@ -1162,8 +1162,8 @@ def validate(
             attention_masks = [None] * len(images)
         elif isinstance(images, list) and config.DATA.AGGREGATION == "mean":
             predictions: list[list[torch.Tensor]] = [[
-                model(image[:, i]) for i in range(image.size(dim=1))] for image in images]
-            output: torch.Tensor = torch.tensor([torch.stack(prediction, dim = 1).mean(dim=1) for prediction in predictions])
+                model(image[:, i], config.MODEL.FEATURE_EXTRACTION_BATCH) for i in range(image.size(dim=1))] for image in images]
+            output: torch.Tensor = torch.tensor([torch.stack(prediction, dim = 0).mean(dim=0) for prediction in predictions])
             output = output.unsqueeze(1).cuda()
         else:
             if images.size(dim=1) > 1:
