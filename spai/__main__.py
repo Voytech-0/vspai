@@ -1163,8 +1163,13 @@ def validate(
         elif isinstance(images, list) and config.DATA.AGGREGATION == "mean":
             predictions: list[list[torch.Tensor]] = [[
                 model(image[:, i], config.MODEL.FEATURE_EXTRACTION_BATCH) for i in range(image.size(dim=1))] for image in images]
-            output: torch.Tensor = torch.tensor([torch.stack(prediction, dim = 0).mean(dim=0) for prediction in predictions])
-            output = output.unsqueeze(1).cuda()
+            # loss needs to be computed differently for this case
+            predictions_tensor = torch.stack([torch.stack(video, dim = 0) for video in predictions], dim = 0)
+            loss = torch.mean(torch.stack([criterion(predictions_tensor[:, i].squeeze(), target) for i in range(5)]))
+            output = [[torch.sigmoid(frame) for frame in prediction] for prediction in predictions]
+            output = [torch.mean(torch.stack(video, dim = 0), dim = 0) for video in output]
+            output = torch.stack(output, dim = 0)
+            output = output.squeeze(2)
         else:
             if images.size(dim=1) > 1:
                 predictions: list[torch.Tensor] = [
@@ -1183,10 +1188,11 @@ def validate(
                 output = model(images)
             attention_masks = [None] * images.size(0)
 
-        loss = criterion(output.squeeze(dim=1), target)
+        if config.DATA.AGGREGATION != "mean":
+            loss = criterion(output.squeeze(dim=1), target)
 
-        # Apply sigmoid to output.
-        output = torch.sigmoid(output)
+            # Apply sigmoid to output
+            output = torch.sigmoid(output)
 
         # Update metrics.
         loss_meter.update(loss.item(), target.size(0))
