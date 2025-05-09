@@ -1165,7 +1165,8 @@ def validate(
                 model(image[:, i], config.MODEL.FEATURE_EXTRACTION_BATCH) for i in range(image.size(dim=1))] for image in images]
             # loss needs to be computed differently for this case
             predictions_tensor = torch.stack([torch.stack(video, dim = 0) for video in predictions], dim = 0)
-            loss = torch.mean(torch.stack([criterion(predictions_tensor[:, i].squeeze(), target) for i in range(5)]))
+            num_frames = len(predictions[0])
+            loss = torch.mean(torch.stack([criterion(predictions_tensor[:, i].squeeze(), target) for i in range(num_frames)]))
             output = [[torch.sigmoid(frame) for frame in prediction] for prediction in predictions]
             output = [torch.mean(torch.stack(video, dim = 0), dim = 0) for video in output]
             output = torch.stack(output, dim = 0)
