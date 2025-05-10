@@ -681,9 +681,10 @@ class ClassificationVisionTransformer(nn.Module):
         if self.frozen_backbone:
             with torch.no_grad():
                 x = self.vit(x)
+                x = self.features_processor(x)
         else:
             x = self.vit(x)
-        x = self.features_processor(x)
+            x = self.features_processor(x)
         if self.cls_head is not None:
             x = self.cls_head(x)
         return x
