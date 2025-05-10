@@ -518,7 +518,9 @@ def build_dataset(
             split=split_name,
             transform=transform,
             views=config.DATA.AUGMENTED_VIEWS,
-            lmdb_storage=pathlib.Path(config.DATA.LMDB_PATH) if config.DATA.LMDB_PATH else None
+            lmdb_storage=pathlib.Path(config.DATA.LMDB_PATH) if config.DATA.LMDB_PATH else None,
+            is_video=(config.DATA.TYPE == "video"),
+            aggregation=config.DATA.AGGREGATION
         )
     elif split_name == "train" and config.MODEL.RESOLUTION_MODE == "arbitrary":
         dataset = CSVDataset(
@@ -528,7 +530,9 @@ def build_dataset(
             transform=transform,
             views=config.DATA.AUGMENTED_VIEWS,
             concatenate_views_horizontally=True,
-            lmdb_storage=pathlib.Path(config.DATA.LMDB_PATH) if config.DATA.LMDB_PATH else None
+            lmdb_storage=pathlib.Path(config.DATA.LMDB_PATH) if config.DATA.LMDB_PATH else None,
+            is_video=(config.DATA.TYPE == "video"),
+            aggregation=config.DATA.AGGREGATION
         )
     else:
         views_generator: Optional[Callable[[Image.Image], tuple[Image.Image, ...]]]

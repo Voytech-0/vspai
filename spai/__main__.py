@@ -131,6 +131,8 @@ def cli() -> None:
 @click.option("--data-prefetch-factor", type=int)
 @click.option("--save-all", is_flag=True)
 @click.option("--opt", "extra_options", type=(str, str), multiple=True)
+@click.option("--data_type", type=str, default="image")
+@click.option("--aggregation", type=str, default="first")
 def train(
     cfg: Path,
     batch_size: Optional[int],
@@ -152,7 +154,9 @@ def train(
     disable_pin_memory: bool,
     data_prefetch_factor: Optional[int],
     save_all: bool,
-    extra_options: tuple[str, str]
+    extra_options: tuple[str, str],
+    data_type: str,
+    aggregation: str,
 ) -> None:
     if csv_root_dir is None:
         csv_root_dir = data_path.parent
@@ -176,7 +180,9 @@ def train(
         "data_workers": data_workers,
         "disable_pin_memory": disable_pin_memory,
         "data_prefetch_factor": data_prefetch_factor,
-        "opts": extra_options
+        "opts": extra_options,
+        "data_type": data_type,
+        "aggregation": aggregation
     })
     if 'LOCAL_RANK' not in os.environ:
         os.environ['LOCAL_RANK'] = str(local_rank)
@@ -340,7 +346,7 @@ def test(
     data_type: str,
     aggregation: str,
     extra_options: tuple[str, str],
-    update_csv: bool
+    update_csv: bool,
 ) -> None:
     config = get_config({
         "cfg": str(cfg),
