@@ -31,6 +31,8 @@ MODEL:
   PATCH_VIT:
     MINIMUM_PATCHES: 4
 DATA:
+  TYPE: "image"
+  AGGREGATION: "first"
   DATASET: csv_sid
   IMG_SIZE: 224
   NUM_WORKERS: 8

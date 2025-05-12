@@ -319,6 +319,8 @@ def train(
 @click.option("--resize-to", type=int,
               help="When this argument is provided the testing images will be resized "
                    "so that their biggest dimension does not exceed this value.")
+@click.option("--data_type", type=str, default="image")
+@click.option("--aggregation", type=str, default="first") 
 @click.option("--opt", "extra_options", type=(str, str), multiple=True)
 @click.option("--update-csv", is_flag=True,
               help="When this flag is provided the predicted score for each sample is "
@@ -335,6 +337,8 @@ def test(
     output: Path,
     tag: str,
     resize_to: Optional[int],
+    data_type: str,
+    aggregation: str,
     extra_options: tuple[str, str],
     update_csv: bool
 ) -> None:
@@ -348,6 +352,8 @@ def test(
         "tag": tag,
         "pretrained": str(model),
         "resize_to": resize_to,
+        "data_type": data_type,
+        "aggregation": aggregation,
         "opts": extra_options
     })
 
@@ -437,7 +443,6 @@ def test(
         if neptune_run is not None:
             neptune_run.sync()
 
-
 @cli.command()
 @click.option("--cfg", default="./configs/spai.yaml", show_default=True,
               type=click.Path(exists=True, dir_okay=False, path_type=Path),
@@ -478,6 +483,8 @@ def test(
 @click.option("--resize-to", type=int,
               help="When this argument is provided the testing images will be resized "
                    "so that their biggest dimension does not exceed this value.")
+@click.option("--data_type", type=str, default="image")
+@click.option("--aggregation", type=str, default="first") 
 @click.option("--opt", "extra_options", type=(str, str), multiple=True)
 def infer(
     cfg: Path,
@@ -490,6 +497,8 @@ def infer(
     output: Path,
     tag: str,
     resize_to: Optional[int],
+    data_type: str, 
+    aggregation: str,
     extra_options: tuple[str, str],
 ) -> None:
     config = get_config({
@@ -502,6 +511,8 @@ def infer(
         "tag": tag,
         "pretrained": str(model),
         "resize_to": resize_to,
+        "data_type": data_type,
+        "aggregation": aggregation,
         "opts": extra_options
     })
 
@@ -1110,7 +1121,7 @@ def validate(
     criterion,
     neptune_run,
     verbose: bool = True,
-    return_predictions: bool = False
+    return_predictions: bool = False,
 ):
     model.eval()
     criterion.eval()
@@ -1121,8 +1132,13 @@ def validate(
 
     predicted_scores: dict[int, tuple[float, Optional[AttentionMask]]] = {}
 
+
     end = time.time()
     for idx, (images, target, dataset_idx) in enumerate(data_loader):
+        #if config.DATA.AGGREGATION == "mean":
+            #images = images[0] 
+            
+
         if isinstance(images, list):
             # In case of arbitrary resolution models the batch is provided as a list of tensors.
             images = [img.cuda(non_blocking=True) for img in images]
@@ -1141,9 +1157,24 @@ def validate(
             output, attention_masks = model(
                 images, config.MODEL.FEATURE_EXTRACTION_BATCH, export_dirs
             )
-        elif isinstance(images, list):
+        elif isinstance(images, list) and config.DATA.AGGREGATION != "mean":
             output = model(images, config.MODEL.FEATURE_EXTRACTION_BATCH)
             attention_masks = [None] * len(images)
+        elif isinstance(images, list) and config.DATA.AGGREGATION == "mean":
+            predictions: list[list[torch.Tensor]] = [[
+                model(image[:, i], config.MODEL.FEATURE_EXTRACTION_BATCH) for i in range(image.size(dim=1))] for image in images]
+            # loss needs to be computed differently for this case
+            num_frames = min([len(predictions[i]) for i in range(len(images))])
+            index_min = np.argmin([len(predictions[i]) for i in range(len(images))])
+            if num_frames < 5:
+                for _ in range(5 - num_frames):
+                    predictions[index_min].append(predictions[index_min][0])
+            predictions_tensor = torch.stack([torch.stack(video, dim = 0) for video in predictions], dim = 0)
+            loss = torch.mean(torch.stack([criterion(predictions_tensor[:, i].squeeze(), target) for i in range(num_frames)]))
+            output = [[torch.sigmoid(frame) for frame in prediction] for prediction in predictions]
+            output = [torch.mean(torch.stack(video, dim = 0), dim = 0) for video in output]
+            output = torch.stack(output, dim = 0)
+            output = output.squeeze(2)
         else:
             if images.size(dim=1) > 1:
                 predictions: list[torch.Tensor] = [
@@ -1162,10 +1193,11 @@ def validate(
                 output = model(images)
             attention_masks = [None] * images.size(0)
 
-        loss = criterion(output.squeeze(dim=1), target)
+        if config.DATA.AGGREGATION != "mean":
+            loss = criterion(output.squeeze(dim=1), target)
 
-        # Apply sigmoid to output.
-        output = torch.sigmoid(output)
+            # Apply sigmoid to output
+            output = torch.sigmoid(output)
 
         # Update metrics.
         loss_meter.update(loss.item(), target.size(0))
