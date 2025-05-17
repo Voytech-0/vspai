@@ -363,6 +363,8 @@ def test(
         "opts": extra_options
     })
 
+    print(config.MODEL.SID_APPROACH)
+
     pathlib.Path(config.OUTPUT).mkdir(exist_ok=True, parents=True)
     global logger
     logger = create_logger(output_dir=config.OUTPUT, dist_rank=0, name=f"{config.MODEL.NAME}")
@@ -1163,7 +1165,7 @@ def validate(
             output, attention_masks = model(
                 images, config.MODEL.FEATURE_EXTRACTION_BATCH, export_dirs
             )
-        elif isinstance(images, list) and config.DATA.AGGREGATION != "mean":
+        elif isinstance(images, list) and config.DATA.AGGREGATION == "first":
             output = model(images, config.MODEL.FEATURE_EXTRACTION_BATCH)
             attention_masks = [None] * len(images)
         elif isinstance(images, list) and config.DATA.AGGREGATION == "mean":
@@ -1181,6 +1183,9 @@ def validate(
             output = [torch.mean(torch.stack(video, dim = 0), dim = 0) for video in output]
             output = torch.stack(output, dim = 0)
             output = output.squeeze(2)
+        elif isinstance(images, list) and config.DATA.AGGREGATION == "simple":
+            output = model(images, config.MODEL.FEATURE_EXTRACTION_BATCH)
+            attention_masks = [None] * len(images)
         else:
             if images.size(dim=1) > 1:
                 predictions: list[torch.Tensor] = [
