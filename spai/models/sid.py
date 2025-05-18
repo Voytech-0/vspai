@@ -842,10 +842,11 @@ class MFViT(nn.Module):
         if self.frozen_backbone:
             with torch.no_grad():
                 x, low_freq, hi_freq = self._extract_features(x, low_freq, hi_freq)
+                x = self.features_processor(x, low_freq, hi_freq)
         else:
             x, low_freq, hi_freq = self._extract_features(x, low_freq, hi_freq)
+            x = self.features_processor(x, low_freq, hi_freq)
 
-        x = self.features_processor(x, low_freq, hi_freq)
         if self.cls_head is not None:
             x = self.cls_head(x)
 
@@ -883,10 +884,11 @@ class MFViT(nn.Module):
         if self.frozen_backbone:
             with torch.no_grad():
                 x, low_freq, hi_freq = self._extract_features(x, low_freq, hi_freq)
+            x = self.features_processor(x, low_freq, hi_freq)
         else:
             x, low_freq, hi_freq = self._extract_features(x, low_freq, hi_freq)
+            x = self.features_processor(x, low_freq, hi_freq)
 
-        x = self.features_processor(x, low_freq, hi_freq)
         if self.cls_head is not None:
             x = self.cls_head(x)
 
