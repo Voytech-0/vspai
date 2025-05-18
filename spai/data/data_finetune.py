@@ -121,6 +121,21 @@ class CSVDataset(torch.utils.data.Dataset):
             label: int = int(self.entries[idx][self.class_column])
             return augmented_img, np.array(label, dtype=float), idx
 
+        if self.is_video and self.aggregation == "simple":
+            # for all frames load image stack together like below
+            augmented_views: list[torch.Tensor] = []
+            num_frames = self.data_reader.num_frames(str(self.csv_root_path / self.entries[idx][self.path_column]))
+            frames = self.data_reader.subsample(str(self.csv_root_path / self.entries[idx][self.path_column]))
+            for frame in frames:
+                img_obj = self.data_reader.load_image(str(self.csv_root_path / self.entries[idx][self.path_column]),
+                                                      channels=3, idx=frame)
+                augmented_views.append(np.array(img_obj))
+
+            augmented_views = [self.transform(image=img)["image"] for img in augmented_views]
+            augmented_img = torch.stack(augmented_views, dim=0)
+            label: int = int(self.entries[idx][self.class_column])
+            return augmented_img, np.array(label, dtype=float), idx
+
 
         else:
             # Load sample.
@@ -508,7 +523,7 @@ def build_dataset(
             csv_root_dir,
             split=split_name,
             transform=transform,
-            lmdb_storage=pathlib.Path(config.DATA.LMDB_PATH) if config.DATA.LMDB_PATH else None
+            lmdb_storage=pathlib.Path(config.DATA.LMDB_PATH) if config.DATA.LMDB_PATH else None,
         )
     elif split_name == "train" and config.TRAIN.LOSS == "supcont":
         assert config.DATA.AUGMENTED_VIEWS > 1, "SupCon loss requires at least 2 views."

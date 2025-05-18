@@ -154,9 +154,9 @@ def train(
     disable_pin_memory: bool,
     data_prefetch_factor: Optional[int],
     save_all: bool,
-    extra_options: tuple[str, str],
     data_type: str,
     aggregation: str,
+    extra_options: tuple[str, str]
 ) -> None:
     if csv_root_dir is None:
         csv_root_dir = data_path.parent
@@ -180,9 +180,9 @@ def train(
         "data_workers": data_workers,
         "disable_pin_memory": disable_pin_memory,
         "data_prefetch_factor": data_prefetch_factor,
-        "opts": extra_options,
         "data_type": data_type,
-        "aggregation": aggregation
+        "aggregation": aggregation,
+        "opts": extra_options
     })
     if 'LOCAL_RANK' not in os.environ:
         os.environ['LOCAL_RANK'] = str(local_rank)
@@ -346,7 +346,7 @@ def test(
     data_type: str,
     aggregation: str,
     extra_options: tuple[str, str],
-    update_csv: bool,
+    update_csv: bool
 ) -> None:
     config = get_config({
         "cfg": str(cfg),
@@ -362,6 +362,8 @@ def test(
         "aggregation": aggregation,
         "opts": extra_options
     })
+
+    print(config.MODEL.SID_APPROACH)
 
     pathlib.Path(config.OUTPUT).mkdir(exist_ok=True, parents=True)
     global logger
@@ -1163,20 +1165,27 @@ def validate(
             output, attention_masks = model(
                 images, config.MODEL.FEATURE_EXTRACTION_BATCH, export_dirs
             )
-        elif isinstance(images, list) and config.DATA.AGGREGATION != "mean":
+        elif isinstance(images, list) and config.DATA.AGGREGATION == "first":
             output = model(images, config.MODEL.FEATURE_EXTRACTION_BATCH)
             attention_masks = [None] * len(images)
         elif isinstance(images, list) and config.DATA.AGGREGATION == "mean":
             predictions: list[list[torch.Tensor]] = [[
                 model(image[:, i], config.MODEL.FEATURE_EXTRACTION_BATCH) for i in range(image.size(dim=1))] for image in images]
             # loss needs to be computed differently for this case
+            num_frames = min([len(predictions[i]) for i in range(len(images))])
+            index_min = np.argmin([len(predictions[i]) for i in range(len(images))])
+            if num_frames < 5:
+                for _ in range(5 - num_frames):
+                    predictions[index_min].append(predictions[index_min][0])
             predictions_tensor = torch.stack([torch.stack(video, dim = 0) for video in predictions], dim = 0)
-            num_frames = len(predictions[0])
             loss = torch.mean(torch.stack([criterion(predictions_tensor[:, i].squeeze(), target) for i in range(num_frames)]))
             output = [[torch.sigmoid(frame) for frame in prediction] for prediction in predictions]
             output = [torch.mean(torch.stack(video, dim = 0), dim = 0) for video in output]
             output = torch.stack(output, dim = 0)
             output = output.squeeze(2)
+        elif isinstance(images, list) and config.DATA.AGGREGATION == "simple":
+            output = model(images, config.MODEL.FEATURE_EXTRACTION_BATCH)
+            attention_masks = [None] * len(images)
         else:
             if images.size(dim=1) > 1:
                 predictions: list[torch.Tensor] = [
