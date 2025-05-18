@@ -244,8 +244,9 @@ def train(
     logger.info(str(model))
 
     optimizer = build_optimizer(config, model, logger, is_pretrain=False)
-    if config.AMP_OPT_LEVEL != "O0":
-        model, optimizer = model, optimizer, opt_level = config.AMP_OPT_LEVEL
+    use_amp = config.AMP_OPT_LEVEL != "O0"
+    global scaler
+    scaler = GradScaler() if use_amp else None
     model_without_ddp = model
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
