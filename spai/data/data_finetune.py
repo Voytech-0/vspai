@@ -209,8 +209,13 @@ class CSVDataset(torch.utils.data.Dataset):
                 pathlib.Path(self.csv_root_path), self.is_video
             )
         else:
-            self.data_reader: readers.LMDBFileStorageReader = readers.LMDBFileStorageReader(
-                filestorage.LMDBFileStorage(self.lmdb_storage, read_only=True)
+            print("LMDB path:", self.lmdb_storage)
+            # self.data_reader: readers.LMDBFileStorageReader = readers.LMDBFileStorageReader(
+            #     filestorage.LMDBFileStorage(self.lmdb_storage, read_only=True)
+            # )
+            # FIXME: use lmdb when needed
+            self.data_reader: readers.FileSystemReader = readers.FileSystemReader(
+                pathlib.Path(self.csv_root_path), self.is_video
             )
 
 

@@ -260,7 +260,8 @@ def train(
     logger.info(f"Loss: \n{criterion}")
 
     if config.PRETRAINED:
-        load_pretrained(config, model_without_ddp.get_vision_transformer(), logger)
+        model_ckpt: pathlib.Path = find_pretrained_checkpoints(config)[0]
+        load_pretrained(config, model_without_ddp, logger, checkpoint_path=model_ckpt)
     else:
         model_without_ddp.unfreeze_backbone()
         logger.info(f"No pretrained model. Backbone parameters are trainable.")
