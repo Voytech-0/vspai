@@ -139,6 +139,7 @@ class CSVDataset(torch.utils.data.Dataset):
 
         else:
             # Load sample.
+            self.csv_root_path = pathlib.Path(self.csv_root_path)
             img_obj: Image.Image = self.data_reader.load_image(
                 str(self.csv_root_path / self.entries[idx][self.path_column]), channels=3
             )
