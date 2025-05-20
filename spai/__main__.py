@@ -1026,9 +1026,14 @@ def train_one_epoch(
             targets = targets.cuda(non_blocking=True)
             # Forward pass each augmented view of the batch separately in order to not
             # significantly increase memory requirements.
-            outputs_views: list[torch.Tensor] = [
-                model(samples[:, i, :, :, :]) for i in range(samples.size(1))
-            ]
+            if config.DATA.AGGREGATION != "simple":
+                outputs_views: list[torch.Tensor] = [
+                    model(samples[:, i, :, :, :]) for i in range(samples.size(1))
+                ]
+            else:
+                outputs_views: list[torch.Tensor] = [
+                    model([sample for sample in samples], config.MODEL.FEATURE_EXTRACTION_BATCH)
+                ]
             outputs: torch.Tensor = torch.stack(outputs_views, dim=1)
             outputs = outputs if outputs.size(dim=1) > 1 else outputs.squeeze(dim=1)
 

@@ -189,8 +189,10 @@ class PoolPatchBasedMFViT(nn.Module):
         # Rearrange the patches from all videos and all frames into a single tensor.
         patched_videos: list[torch.Tensor] = []
         for video in x:
+            video = video.squeeze(0)
             patched_frames: list[torch.Tensor] = []
             for frame in video:
+                frame = frame.unsqueeze(0)
                 patched: torch.Tensor = utils.patchify_image(
                     frame,
                     (self.img_patch_size, self.img_patch_size),
@@ -1598,6 +1600,7 @@ def build_mf_vit(config) -> MFViT:
         )
     else:
         raise RuntimeError(f"Unsupported train mode: {config.TRAIN.MODE}")
+
 
     if config.MODEL.RESOLUTION_MODE == "fixed":
         model = MFViT(
