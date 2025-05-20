@@ -59,7 +59,7 @@ class CSVDataset(torch.utils.data.Dataset):
     ):
         super().__init__()
         self.csv_path: pathlib.Path = csv_path
-        self.csv_root_path: pathlib.Path = csv_root_path
+        self.csv_root_path: pathlib.Path = pathlib.Path(csv_root_path)
         self.split: str = split
         self.path_column: str = path_column
         self.split_column: str = split_column
@@ -139,7 +139,6 @@ class CSVDataset(torch.utils.data.Dataset):
 
         else:
             # Load sample.
-            self.csv_root_path = pathlib.Path(self.csv_root_path)
             img_obj: Image.Image = self.data_reader.load_image(
                 str(self.csv_root_path / self.entries[idx][self.path_column]), channels=3
             )
@@ -205,7 +204,7 @@ class CSVDataset(torch.utils.data.Dataset):
         # the overall performance gets worse due to threads congestion.
         cv2.setNumThreads(1)
 
-        if self.lmdb_storage is None:
+        if self.lmdb_storage is None or self.lmdb_storage == "None":
             self.data_reader: readers.FileSystemReader = readers.FileSystemReader(
                 pathlib.Path(self.csv_root_path), self.is_video
             )
