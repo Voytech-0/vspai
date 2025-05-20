@@ -1165,7 +1165,7 @@ def validate(
             output, attention_masks = model(
                 images, config.MODEL.FEATURE_EXTRACTION_BATCH, export_dirs
             )
-        elif isinstance(images, list) and config.DATA.AGGREGATION == "first":
+        elif isinstance(images, list) and config.DATA.AGGREGATION in ["first", "mamba"]:
             output = model(images, config.MODEL.FEATURE_EXTRACTION_BATCH)
             attention_masks = [None] * len(images)
         elif isinstance(images, list) and config.DATA.AGGREGATION == "mean":

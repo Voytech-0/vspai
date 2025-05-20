@@ -34,8 +34,10 @@ from . import utils
 from . import backbones
 from spai.utils import save_image_with_attention_overlay
 
-# https://github.com/state-spaces/mamba
-from mamba_ssm import Mamba2
+# original, gives cuda errors, not used: https://github.com/state-spaces/mamba
+# used: https://github.com/alxndrTL/mamba.py
+from mambapy.mamba import Mamba, MambaConfig
+
 class MambaPatchBasedMFViT(nn.Module):
     def __init__(
         self,
@@ -66,8 +68,8 @@ class MambaPatchBasedMFViT(nn.Module):
             frozen_backbone=frozen_backbone,
             initialization_scope=initialization_scope
         )
-
-        self.mamba = Mamba2(d_model=cls_vector_dim)
+        config = MambaConfig(d_model=cls_vector_dim, n_layers=1)
+        self.mamba = Mamba(config)
 
         self.img_patch_size: int = img_patch_size
         self.img_patch_stride: int = img_patch_stride
@@ -242,7 +244,7 @@ class MambaPatchBasedMFViT(nn.Module):
 
         x = x.transpose(0, 1) # B x T x D
         x = self.mamba(x) # mamba layer to model sequence, 
-        x = x.mean(dim=0) # mean pool time dimension. # B x D
+        x = x.mean(dim=1) # mean pool time dimension. # B x D
 
         # KEEP/REMOVE ?
         x = self.norm(x)  # B x D

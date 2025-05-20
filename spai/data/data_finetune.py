@@ -121,7 +121,7 @@ class CSVDataset(torch.utils.data.Dataset):
             label: int = int(self.entries[idx][self.class_column])
             return augmented_img, np.array(label, dtype=float), idx
 
-        if self.is_video and self.aggregation == "simple":
+        if self.is_video and self.aggregation in ["simple", "mamba"]:
             # for all frames load image stack together like below
             augmented_views: list[torch.Tensor] = []
             num_frames = self.data_reader.num_frames(str(self.csv_root_path / self.entries[idx][self.path_column])) 
