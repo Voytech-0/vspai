@@ -28,12 +28,7 @@ from scipy import interpolate
 from matplotlib import colormaps, pyplot as plt
 from PIL import Image
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
-
-try:
-    # noinspection PyUnresolvedReferences
-    from apex import amp
-except ImportError:
-    amp = None
+from torch import amp
 
 
 def load_checkpoint(config, model, optimizer, lr_scheduler, logger):
@@ -52,8 +47,8 @@ def load_checkpoint(config, model, optimizer, lr_scheduler, logger):
         config.defrost()
         config.TRAIN.START_EPOCH = checkpoint['epoch'] + 1
         config.freeze()
-        if 'amp' in checkpoint and config.AMP_OPT_LEVEL != "O0" and checkpoint['config'].AMP_OPT_LEVEL != "O0":
-            amp.load_state_dict(checkpoint['amp'])
+        if 'amp' in checkpoint and config.AMP_OPT_LEVEL != "O0":
+            torch.cuda.amp.grad_scaler.GradScaler().load_state_dict(checkpoint['amp'])
         logger.info(f"=> loaded successfully '{config.MODEL.RESUME}' (epoch {checkpoint['epoch']})")
         if 'max_accuracy' in checkpoint:
             max_accuracy = checkpoint['max_accuracy']
@@ -71,7 +66,7 @@ def save_checkpoint(config, epoch, model, max_accuracy, optimizer, lr_scheduler,
                   'epoch': epoch,
                   'config': config}
     if config.AMP_OPT_LEVEL != "O0":
-        save_state['amp'] = amp.state_dict()
+            save_state['amp'] = torch.cuda.amp.GradScaler().state_dict()
 
     save_path = os.path.join(config.OUTPUT, f'ckpt_epoch_{epoch}.pth')
     logger.info(f"{save_path} saving......")
