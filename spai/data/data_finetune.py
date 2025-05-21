@@ -22,6 +22,7 @@ from typing import Any, Union, Optional, Iterable
 from collections.abc import Callable
 
 import albumentations as A
+from torch.utils.data._utils.collate import default_collate
 import torchvision.transforms.functional
 from albumentations.augmentations.transforms import ImageCompressionType
 from albumentations.pytorch import ToTensorV2
@@ -392,7 +393,10 @@ def build_loader_finetune(config, logger):
         pin_memory=config.DATA.PIN_MEMORY,
         drop_last=True,
         shuffle=True,
-        prefetch_factor=config.DATA.PREFETCH_FACTOR
+        prefetch_factor=config.DATA.PREFETCH_FACTOR,
+        collate_fn = (default_collate 
+                      if not config.DATA.AGGREGATION == "simple"
+                      else image_enlisting_collate_fn) 
     )
     data_loader_val = DataLoader(
         dataset_val,
