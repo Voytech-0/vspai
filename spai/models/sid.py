@@ -59,15 +59,15 @@ class MambaPatchBasedMFViT(nn.Module):
     ) -> None:
         super().__init__()
 
-        self.mfvit = MFViT(
-            vit,
-            features_processor,
-            None,
-            masking_radius,
-            img_patch_size,
-            frozen_backbone=frozen_backbone,
-            initialization_scope=initialization_scope
-        )
+        # self.mfvit = MFViT(
+        #     vit,
+        #     features_processor,
+        #     None,
+        #     masking_radius,
+        #     img_patch_size,
+        #     frozen_backbone=frozen_backbone,
+        #     initialization_scope=initialization_scope
+        # )
         config = MambaConfig(d_model=cls_vector_dim, n_layers=1)
         self.mamba = Mamba(config)
 
@@ -121,14 +121,16 @@ class MambaPatchBasedMFViT(nn.Module):
         :param export_dirs:
         """
         if isinstance(x, torch.Tensor):
-            x =  self.forward_batch(x)
+            raise NotImplementedError("Mamba does not support input as a Tensor.")
+            # x = self.forward_batch(x)
         elif isinstance(x, list):
             if feature_extraction_batch_size is None:
                 feature_extraction_batch_size = len(x)
             if export_dirs is not None:
-                x = self.forward_arbitrary_resolution_batch_with_export(
-                    x, feature_extraction_batch_size, export_dirs
-                )
+                raise NotImplementedError("Mamba does not support exporting during forward.")
+                # x = self.forward_arbitrary_resolution_batch_with_export(
+                #     x, feature_extraction_batch_size, export_dirs
+                # )
             else:
                 x = self.forward_arbitrary_resolution_batch(x, feature_extraction_batch_size)
         else:
@@ -158,25 +160,6 @@ class MambaPatchBasedMFViT(nn.Module):
             return x, attn
         else:
             return x
-
-    def forward_batch(self, x: torch.Tensor) -> torch.Tensor:
-        x = utils.patchify_image(
-            x,
-            (self.img_patch_size, self.img_patch_size),
-            (self.img_patch_stride, self.img_patch_stride)
-        )  # B x L x C x H x W
-
-        patch_features: list[torch.Tensor] = []
-        for i in range(x.size(1)):
-            patch_features.append(self.mfvit(x[:, i]))
-        x = torch.stack(patch_features, dim=1)  # B x L x D
-        del patch_features
-
-        x = self.patches_attention(x)  # B x D
-        x = self.norm(x)  # B x D
-        x = self.cls_head(x)  # B x 1
-
-        return x
 
     def forward_arbitrary_resolution_batch(
         self,
@@ -252,167 +235,6 @@ class MambaPatchBasedMFViT(nn.Module):
         x = self.cls_head(x)  # B x 1
 
         return x
-
-    # TODO: adjust to match no export version
-    def forward_arbitrary_resolution_batch_with_export(
-        self,
-        x: list[torch.Tensor],
-        feature_extraction_batch_size: int,
-        export_dirs: list[pathlib.Path],
-        export_image_patches: bool = False
-    ) -> tuple[torch.Tensor, list['AttentionMask']]:
-        """Forward passes any resolution images and exports their spectral context attention masks.
-
-        The batch size of the tensors in the `x` list should be equal to 1, i.e. each
-        tensor in the list should correspond to a single image.
-
-        :param x: List of 1 x C x H_i x W_i tensors, where i denotes the i-th image in the list.
-        :param feature_extraction_batch_size: The maximum number of image patches that will
-            be processed under a single batch. It should be set to a value high-enough to fully
-            utilize the accelerator used, and low-enough to not cause out-of-memory errors.
-        :param export_dirs: A list of directories that will be used for exporting the
-            spectral context attention masks of each image.
-        :param export_image_patches: When this flag is set to True, each patch considered
-            by the spectral context attention will be exported in a separate file. Beware
-            that when there is overlap among the patches, or on very large images, the
-            number of these patches could be very large.
-
-        :returns: A tuple containing a B x 1 tensor, where B is the batch size, and a list
-            of attention masks for each image in the batch.
-        """
-        predictions: list[torch.Tensor] = []
-        attention_masks: list[AttentionMask] = []
-
-        # Process each image in the batch, one by one, and export its corresponding
-        # spectral context attention mask.
-        for img, export_dir in zip(x, export_dirs):
-            # Patchify the image.
-            orig_height: int = img.size(2)
-            orig_width: int = img.size(3)
-            patched: torch.Tensor = utils.patchify_image(
-                img,
-                (self.img_patch_size, self.img_patch_size),
-                (self.img_patch_stride, self.img_patch_stride)
-            )  # 1 x L_i x C x H x W
-            if patched.size(1) < self.minimum_patches:
-                patched: tuple[torch.Tensor, ...] = five_crop(
-                    img, [self.img_patch_size, self.img_patch_size]
-                )
-                patched: torch.Tensor = torch.stack(patched, dim=1)
-
-            # Encode each patch and export it if requested.
-            features: list[torch.Tensor] = []
-            if export_image_patches:
-                # Process the patches one by one and export them.
-                for i in range(0, patched.size(1)):
-                    export_file = export_dir / f"patch_{i}.png"
-                    features.append(self.mfvit.forward_with_export(
-                        patched[:, i], export_file=export_file
-                    ))
-            else:
-                # Process the patches in groups of feature_extraction_batch_size.
-                for i in range(0, patched.size(1), feature_extraction_batch_size):
-                    features.append(self.mfvit(patched[0, i:i+feature_extraction_batch_size]))
-            x = torch.cat(features, dim=0)  # SUM(L_i) x D
-            del features
-
-            # Attend to patches.
-            x, attn = self.patches_attention(x.unsqueeze(0), return_attn=True)  # 1 x D, 1 x L_i
-            patches_attn_dir: pathlib.Path = export_dir / f"patches_attn"
-            patches_attn_dir.mkdir(exist_ok=True, parents=True)
-
-            x = self.norm(x)  # 1 x D
-            x = self.cls_head(x)  # 1 x 1
-
-            # Export the spectral context attention mask.
-            attn_list: list[float] = attn.detach().cpu().mean(dim=1).tolist()[0][0]
-            if export_image_patches:
-                for i in range(0, patched.size(1)):
-                    export_file = patches_attn_dir / f"{attn_list[i]:.3f}_patch_{i}_.png"
-                    Image.fromarray(
-                        (patched[:, i].detach().cpu().permute(0, 2, 3, 1).squeeze(
-                            dim=0).numpy() * 255).astype(
-                            np.uint8)).save(export_file)
-            attn_img_file = (patches_attn_dir
-                                / f"attn_overlay_{F.sigmoid(x).detach().cpu().tolist()[0]}.png")
-            attn_mask_file = (patches_attn_dir
-                                / f"attn_mask_{F.sigmoid(x).detach().cpu().tolist()[0]}.png")
-            attn_overlay_file = (
-                patches_attn_dir
-                    / f"attn_mask_colormap_{F.sigmoid(x).detach().cpu().tolist()[0]}.png"
-            )
-            save_image_with_attention_overlay(
-                patched.detach().cpu(),
-                attn_list,
-                orig_height,
-                orig_width,
-                self.img_patch_size,
-                self.img_patch_stride,
-                attn_img_file,
-                mask_path=attn_mask_file,
-                overlay_path=attn_overlay_file
-            )
-
-            predictions.append(x)
-            attention_masks.append(AttentionMask(mask=attn_mask_file,
-                                                 overlay=attn_overlay_file,
-                                                 overlayed_image=attn_img_file))
-        x = torch.cat(predictions, dim=0)
-        return x, attention_masks
-
-    def get_vision_transformer(self) -> vision_transformer.VisionTransformer:
-        return self.mfvit.get_vision_transformer()
-
-    def unfreeze_backbone(self) -> None:
-        self.mfvit.unfreeze_backbone()
-
-    def freeze_backbone(self) -> None:
-        self.mfvit.freeze_backbone()
-
-    def export_onnx_patch_aggregator(self, export_file: pathlib.Path) -> None:
-        # Export the spectral context attention and the classifier.
-        outer_instance = self
-        class SCAClassifier(nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.outer_instance = outer_instance
-            def forward(self, x: torch.Tensor) -> torch.Tensor:
-                """Input size: B x L x D"""
-                x = self.outer_instance.patches_attention(x)  # B x D
-                x = self.outer_instance.norm(x)  # B x D
-                x = self.outer_instance.cls_head(x)  # B x 1
-                return x
-        model: SCAClassifier = SCAClassifier()
-        x: torch.Tensor = torch.rand((3, 4, outer_instance.cls_vector_dim))
-        torch._dynamo.mark_dynamic(x, 0)
-        torch._dynamo.mark_dynamic(x, 1)
-        # onnx_options: torch.onnx.ExportOptions = torch.onnx.ExportOptions(dynamic_shapes=True)
-        # onnx_program: torch.onnx.ONNXProgram = torch.onnx.dynamo_export(
-        #     model, x, export_options=onnx_options
-        # )
-        batch_dim: torch.export.Dim = torch.export.Dim("batch_size")
-        seq_dim: torch.export.Dim = torch.export.Dim("seq_dim")
-        ep: torch.export.ExportedProgram = torch.export.export(
-            model,
-            args=(x,),
-            dynamic_shapes={
-                "x": {0: batch_dim, 1: seq_dim},
-            }
-        )
-        onnx_program = torch.onnx.export(ep, dynamo=True, report=True, verify=True)
-        onnx_program.save(str(export_file))
-
-    def export_onnx(
-        self,
-        patch_encoder: pathlib.Path,
-        patch_aggregator: pathlib.Path,
-        include_fft_preprocessing: bool = True,
-    ) -> None:
-        if include_fft_preprocessing:
-            self.mfvit.export_onnx(patch_encoder)
-        else:
-            self.mfvit.export_onnx_without_fft(patch_encoder)
-        self.export_onnx_patch_aggregator(patch_aggregator)
 
 
 class PoolPatchBasedMFViT(nn.Module):
