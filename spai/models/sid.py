@@ -200,7 +200,7 @@ class MambaPatchBasedMFViT(nn.Module):
         x = torch.cat(x, dim=1) # T x SUM(L_i) x C x H x W
 
         # Process the patches in groups of feature_extraction_batch_size.
-        features: list[list[torch.Tensor]]= []
+        features: list[list[torch.Tensor]] = []
         for t in range(0, x.size(0)):
             features_t = []
             for i in range(0, x.size(1), feature_extraction_batch_size):
@@ -209,7 +209,7 @@ class MambaPatchBasedMFViT(nn.Module):
 
         features = torch.stack([torch.stack(features_t, dim = 0) for features_t in features], dim = 0)
 
-        x = features.squeeze(1) # T x SUM(L_i) x D
+        x = features.squeeze(1)  # T x SUM(L_i) x D
         del features
 
         # Attend to patches according to the image they belong to.

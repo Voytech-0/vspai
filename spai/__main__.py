@@ -1021,7 +1021,7 @@ def train_one_epoch(
             negative_outputs = model(negative)
         else:
             samples, targets, _ = batch
-            if config.DATA.AGGREGATION != "simple":
+            if config.DATA.AGGREGATION not in ["simple", "mamba"]:
                 batch_size: int = samples.size(0)
                 samples = samples.cuda(non_blocking=True)
             else:
@@ -1030,7 +1030,7 @@ def train_one_epoch(
             targets = targets.cuda(non_blocking=True)
             # Forward pass each augmented view of the batch separately in order to not
             # significantly increase memory requirements.
-            if config.DATA.AGGREGATION != "simple":
+            if config.DATA.AGGREGATION not in  ["simple", "mamba"]:
                 outputs_views: list[torch.Tensor] = [
                     model(samples[:, i, :, :, :]) for i in range(samples.size(1))
                 ]
@@ -1199,7 +1199,7 @@ def validate(
             output = [torch.mean(torch.stack(video, dim=0), dim=0) for video in output]
             output = torch.stack(output, dim=0)
             output = output.squeeze(2)
-        elif isinstance(images, list) and config.DATA.AGGREGATION == "simple":
+        elif isinstance(images, list) and config.DATA.AGGREGATION in ["simple", "mamba"]:
             output = model(images, config.MODEL.FEATURE_EXTRACTION_BATCH)
             attention_masks = [None] * len(images)
         else:
