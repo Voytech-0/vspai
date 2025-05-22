@@ -45,6 +45,7 @@ class MambaPatchBasedMFViT(nn.Module):
                    backbones.CLIPBackbone,
                    backbones.DINOv2Backbone],
         features_processor: 'FrequencyRestorationEstimator',
+        mamba: 'Mamba',
         cls_head: Optional[nn.Module],
         masking_radius: int,
         img_patch_size: int,
@@ -59,17 +60,16 @@ class MambaPatchBasedMFViT(nn.Module):
     ) -> None:
         super().__init__()
 
-        # self.mfvit = MFViT(
-        #     vit,
-        #     features_processor,
-        #     None,
-        #     masking_radius,
-        #     img_patch_size,
-        #     frozen_backbone=frozen_backbone,
-        #     initialization_scope=initialization_scope
-        # )
-        config = MambaConfig(d_model=cls_vector_dim, n_layers=1)
-        self.mamba = Mamba(config)
+        self.mfvit = MFViT(
+            vit,
+            features_processor,
+            None,
+            masking_radius,
+            img_patch_size,
+            frozen_backbone=frozen_backbone,
+            initialization_scope=initialization_scope
+        )
+        self.mamba = mamba
 
         self.img_patch_size: int = img_patch_size
         self.img_patch_stride: int = img_patch_stride
@@ -1771,6 +1771,7 @@ def build_mf_vit(config) -> MFViT:
     else:
         raise RuntimeError(f"Unsupported ViT weights type: {config.MODEL_WEIGHTS}")
 
+
     # Build features processor.
     fre: FrequencyRestorationEstimator = FrequencyRestorationEstimator(
         features_num=len(config.MODEL.VIT.INTERMEDIATE_LAYERS),
@@ -1831,9 +1832,12 @@ def build_mf_vit(config) -> MFViT:
                 initialization_scope=initialization_scope
             )
         elif config.DATA.AGGREGATION == "mamba":
+            mamba_config = MambaConfig(d_model=cls_vector_dim, n_layers=1)
+            mamba = Mamba(mamba_config)
             model = MambaPatchBasedMFViT(
                 vit,
                 fre,
+                mamba,
                 cls_head,
                 masking_radius=config.MODEL.FRE.MASKING_RADIUS,
                 img_patch_size=config.DATA.IMG_SIZE,
