@@ -235,6 +235,15 @@ class MambaPatchBasedMFViT(nn.Module):
         x = self.cls_head(x)  # B x 1
 
         return x
+    
+    def get_vision_transformer(self) -> vision_transformer.VisionTransformer:
+        return self.mfvit.get_vision_transformer()
+
+    def unfreeze_backbone(self) -> None:
+        self.mfvit.unfreeze_backbone()
+
+    def freeze_backbone(self) -> None:
+        self.mfvit.freeze_backbone()
 
 
 class PoolPatchBasedMFViT(nn.Module):
