@@ -392,8 +392,10 @@ class PoolPatchBasedMFViT(nn.Module):
         # Rearrange the patches from all videos and all frames into a single tensor.
         patched_videos: list[torch.Tensor] = []
         for video in x:
+            video = video.squeeze(0)
             patched_frames: list[torch.Tensor] = []
             for frame in video:
+                frame = frame.unsqueeze(0)
                 patched: torch.Tensor = utils.patchify_image(
                     frame,
                     (self.img_patch_size, self.img_patch_size),
@@ -1046,10 +1048,11 @@ class MFViT(nn.Module):
         if self.frozen_backbone:
             with torch.no_grad():
                 x, low_freq, hi_freq = self._extract_features(x, low_freq, hi_freq)
+                x = self.features_processor(x, low_freq, hi_freq)
         else:
             x, low_freq, hi_freq = self._extract_features(x, low_freq, hi_freq)
+            x = self.features_processor(x, low_freq, hi_freq)
 
-        x = self.features_processor(x, low_freq, hi_freq)
         if self.cls_head is not None:
             x = self.cls_head(x)
 
@@ -1087,10 +1090,11 @@ class MFViT(nn.Module):
         if self.frozen_backbone:
             with torch.no_grad():
                 x, low_freq, hi_freq = self._extract_features(x, low_freq, hi_freq)
+            x = self.features_processor(x, low_freq, hi_freq)
         else:
             x, low_freq, hi_freq = self._extract_features(x, low_freq, hi_freq)
+            x = self.features_processor(x, low_freq, hi_freq)
 
-        x = self.features_processor(x, low_freq, hi_freq)
         if self.cls_head is not None:
             x = self.cls_head(x)
 
@@ -1254,9 +1258,10 @@ class ClassificationVisionTransformer(nn.Module):
         if self.frozen_backbone:
             with torch.no_grad():
                 x = self.vit(x)
+                x = self.features_processor(x)
         else:
             x = self.vit(x)
-        x = self.features_processor(x)
+            x = self.features_processor(x)
         if self.cls_head is not None:
             x = self.cls_head(x)
         return x
@@ -1799,6 +1804,7 @@ def build_mf_vit(config) -> MFViT:
         )
     else:
         raise RuntimeError(f"Unsupported train mode: {config.TRAIN.MODE}")
+
 
     if config.MODEL.RESOLUTION_MODE == "fixed":
         model = MFViT(

@@ -22,6 +22,7 @@ from typing import Any, Union, Optional, Iterable
 from collections.abc import Callable
 
 import albumentations as A
+from torch.utils.data._utils.collate import default_collate
 import torchvision.transforms.functional
 from albumentations.augmentations.transforms import ImageCompressionType
 from albumentations.pytorch import ToTensorV2
@@ -59,7 +60,7 @@ class CSVDataset(torch.utils.data.Dataset):
     ):
         super().__init__()
         self.csv_path: pathlib.Path = csv_path
-        self.csv_root_path: pathlib.Path = csv_root_path
+        self.csv_root_path: pathlib.Path = pathlib.Path(csv_root_path)
         self.split: str = split
         self.path_column: str = path_column
         self.split_column: str = split_column
@@ -124,7 +125,7 @@ class CSVDataset(torch.utils.data.Dataset):
         if self.is_video and self.aggregation in ["simple", "mamba"]:
             # for all frames load image stack together like below
             augmented_views: list[torch.Tensor] = []
-            num_frames = self.data_reader.num_frames(str(self.csv_root_path / self.entries[idx][self.path_column])) 
+            num_frames = self.data_reader.num_frames(str(self.csv_root_path / self.entries[idx][self.path_column]))
             frames = self.data_reader.subsample(str(self.csv_root_path / self.entries[idx][self.path_column]))
             for frame in frames:
                 img_obj = self.data_reader.load_image(str(self.csv_root_path / self.entries[idx][self.path_column]),
@@ -204,13 +205,18 @@ class CSVDataset(torch.utils.data.Dataset):
         # the overall performance gets worse due to threads congestion.
         cv2.setNumThreads(1)
 
-        if self.lmdb_storage is None:
+        if self.lmdb_storage is None or self.lmdb_storage == "None":
             self.data_reader: readers.FileSystemReader = readers.FileSystemReader(
                 pathlib.Path(self.csv_root_path), self.is_video
             )
         else:
-            self.data_reader: readers.LMDBFileStorageReader = readers.LMDBFileStorageReader(
-                filestorage.LMDBFileStorage(self.lmdb_storage, read_only=True)
+            print("LMDB path:", self.lmdb_storage)
+            # self.data_reader: readers.LMDBFileStorageReader = readers.LMDBFileStorageReader(
+            #     filestorage.LMDBFileStorage(self.lmdb_storage, read_only=True)
+            # )
+            # FIXME: use lmdb when needed
+            self.data_reader: readers.FileSystemReader = readers.FileSystemReader(
+                pathlib.Path(self.csv_root_path), self.is_video
             )
 
 
@@ -387,7 +393,10 @@ def build_loader_finetune(config, logger):
         pin_memory=config.DATA.PIN_MEMORY,
         drop_last=True,
         shuffle=True,
-        prefetch_factor=config.DATA.PREFETCH_FACTOR
+        prefetch_factor=config.DATA.PREFETCH_FACTOR,
+        collate_fn = (default_collate 
+                      if not config.DATA.AGGREGATION == "simple"
+                      else image_enlisting_collate_fn) 
     )
     data_loader_val = DataLoader(
         dataset_val,
@@ -536,7 +545,6 @@ def build_dataset(
             lmdb_storage=pathlib.Path(config.DATA.LMDB_PATH) if config.DATA.LMDB_PATH else None,
             is_video=(config.DATA.TYPE == "video"),
             aggregation=config.DATA.AGGREGATION
-
         )
     elif split_name == "train" and config.MODEL.RESOLUTION_MODE == "arbitrary":
         dataset = CSVDataset(

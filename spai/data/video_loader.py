@@ -42,6 +42,9 @@ def video_subsample(filepath: str):
     for i in range(0, num_frames, stride):
         subsampled_idx.append(i)
 
+    if len(subsampled_idx) > 8:
+        subsampled_idx = subsampled_idx[:8]
+
     return subsampled_idx
 
 
