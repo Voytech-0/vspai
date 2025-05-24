@@ -83,16 +83,15 @@ class MambaPatchBasedMFViT(nn.Module):
         self.scale = dim_head ** -0.5
         self.attend = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
-        with torch.no_grad():
-            self.to_kv = nn.Linear(cls_vector_dim, attn_embed_dim*2, bias=False)
-            self.to_kv.weight.requires_grad = False
-            self.patch_aggregator = nn.Parameter(torch.zeros((num_heads, 1, attn_embed_dim//num_heads)), requires_grad=False)
-            nn.init.trunc_normal_(self.patch_aggregator, std=.02)
-            self.to_out = nn.Sequential(
-                nn.Linear(attn_embed_dim, cls_vector_dim, bias=False),
-                nn.Dropout(dropout)
-            )
-            self.to_out[0].weight.requires_grad = False
+        self.to_kv = nn.Linear(cls_vector_dim, attn_embed_dim*2, bias=False)
+        self.to_kv.weight.requires_grad = not self.frozen_backbone
+        self.patch_aggregator = nn.Parameter(torch.zeros((num_heads, 1, attn_embed_dim//num_heads)), requires_grad=not self.frozen_backbone)
+        nn.init.trunc_normal_(self.patch_aggregator, std=.02)
+        self.to_out = nn.Sequential(
+            nn.Linear(attn_embed_dim, cls_vector_dim, bias=False),
+            nn.Dropout(dropout)
+        )
+        self.to_out[0].weight.requires_grad = not self.frozen_backbone
 
         self.norm = nn.LayerNorm(cls_vector_dim)
         self.cls_head = cls_head
