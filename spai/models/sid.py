@@ -292,6 +292,7 @@ class PoolPatchBasedMFViT(nn.Module):
         self.img_patch_stride: int = img_patch_stride
         self.minimum_patches: int = minimum_patches
         self.cls_vector_dim: int = cls_vector_dim
+        self.frozen_backbone = frozen_backbone
 
         # Cross-Attention with a learnable vector layers.
         # FREEZE
@@ -626,21 +627,21 @@ class PatchBasedMFViT(nn.Module):
             return x
 
     def forward_batch(self, x: torch.Tensor) -> torch.Tensor:
-        x = utils.patchify_image(
-            x,
-            (self.img_patch_size, self.img_patch_size),
-            (self.img_patch_stride, self.img_patch_stride)
-        )  # B x L x C x H x W
-        raise Exception("Not arbitrary res forward method used")
+        with torch.no_grad():
+            x = utils.patchify_image(
+                x,
+                (self.img_patch_size, self.img_patch_size),
+                (self.img_patch_stride, self.img_patch_stride)
+            )  # B x L x C x H x W
 
-        patch_features: list[torch.Tensor] = []
-        for i in range(x.size(1)):
-            patch_features.append(self.mfvit(x[:, i]))
-        x = torch.stack(patch_features, dim=1)  # B x L x D
-        del patch_features
+            patch_features: list[torch.Tensor] = []
+            for i in range(x.size(1)):
+                patch_features.append(self.mfvit(x[:, i]))
+            x = torch.stack(patch_features, dim=1)  # B x L x D
+            del patch_features
 
-        x = self.patches_attention(x)  # B x D
-        x = self.norm(x)  # B x D
+            x = self.patches_attention(x)  # B x D
+            x = self.norm(x)  # B x D
         x = self.cls_head(x)  # B x 1
 
         return x
