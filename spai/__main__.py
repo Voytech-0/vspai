@@ -417,12 +417,12 @@ def test(
                                                                   test_datasets_names):
             predictions: Optional[dict[int, tuple[float, Optional[AttentionMask]]]] = None
             if update_csv:
-                acc, ap, auc, loss, predictions = validate(
+                acc, ap, auc, recall, fnr, loss, predictions = validate(
                     config, test_data_loader, model, criterion, neptune_run,
                     return_predictions=True
                 )
             else:
-                acc, ap, auc, loss = validate(config, test_data_loader,
+                acc, ap, auc, recall, fnr, loss = validate(config, test_data_loader,
                                               model, criterion, neptune_run)
             logger.info(f"Test | {test_data_name} | Epoch {checkpoint_epoch} | "
                         f"Images: {len(test_dataset)} | loss: {loss:.4f}")
@@ -432,10 +432,16 @@ def test(
                         f"Images: {len(test_dataset)} | AP: {ap:.3f}")
             logger.info(f"Test | {test_data_name} | Epoch {checkpoint_epoch}  | "
                         f"Images: {len(test_dataset)} | AUC: {auc:.3f}")
+            logger.info(f"Test | {test_data_name} | Epoch {checkpoint_epoch}  | "
+                        f"Images: {len(test_dataset)} | Recall: {recall:.3f}")
+            logger.info(f"Test | {test_data_name} | Epoch {checkpoint_epoch}  | "
+                        f"Images: {len(test_dataset)} | FNR: {fnr:.3f}")
             neptune_run[f"test/{test_data_name}/acc"].append(acc, step=checkpoint_epoch)
             neptune_run[f"test/{test_data_name}/ap"].append(ap, step=checkpoint_epoch)
             neptune_run[f"test/{test_data_name}/auc"].append(auc, step=checkpoint_epoch)
             neptune_run[f"test/{test_data_name}/loss"].append(loss, step=checkpoint_epoch)
+            neptune_run[f"test/{test_data_name}/recall"].append(recall, step=checkpoint_epoch)
+            neptune_run[f"test/{test_data_name}/fnr"].append(fnr, step=checkpoint_epoch)
 
             if predictions is not None:
                 column_name: str = f"{tag}_epoch_{checkpoint_epoch}"
@@ -557,7 +563,7 @@ def infer(
                                                                           test_datasets_names,
                                                                           input_paths):
         predictions: Optional[dict[int, tuple[float, Optional[AttentionMask]]]]
-        acc, ap, auc, loss, predictions = validate(
+        acc, ap, auc, recall, fnr, loss, predictions = validate(
             config, test_data_loader, model, criterion, None, return_predictions=True
         )
 
@@ -919,7 +925,7 @@ def train_model(
         ap: float
         auc: float
         loss: float
-        acc, ap, auc, loss = validate(config, data_loader_val, model, criterion, neptune_run)
+        acc, ap, auc, recall, fnr, loss = validate(config, data_loader_val, model, criterion, neptune_run)
         logger.info(f"Val | Epoch {epoch} | Images: {len(dataset_val)} | loss: {loss:.4f}")
         logger.info(f"Val | Epoch {epoch} | Images: {len(dataset_val)} | ACC: {acc:.3f}")
         logger.info(f"Val | Epoch {epoch} | Images: {len(dataset_val)} | AP: {ap:.3f}")
@@ -952,7 +958,7 @@ def train_model(
         for test_data_loader, test_dataset, test_data_name in zip(data_loaders_test,
                                                                   datasets_test,
                                                                   datasets_test_names):
-            acc, ap, auc, loss = validate(config, test_data_loader, model,
+            acc, ap, auc, recall, fnr, loss = validate(config, test_data_loader, model,
                                           criterion, neptune_run)
             logger.info(f"Test | {test_data_name} | Epoch {epoch} | Images: {len(test_dataset)} "
                         f"| loss: {loss:.4f}")
@@ -1152,7 +1158,7 @@ def validate(
 
     batch_time = AverageMeter()
     loss_meter = AverageMeter()
-    cls_metrics: metrics.Metrics = metrics.Metrics(metrics=("auc", "ap", "accuracy"))
+    cls_metrics: metrics.Metrics = metrics.Metrics(metrics=("auc", "ap", "accuracy", "recall", "fnr"))
 
     predicted_scores: dict[int, tuple[float, Optional[AttentionMask]]] = {}
 
@@ -1254,11 +1260,13 @@ def validate(
     auc: float = metric_values["auc"].item()
     ap: float = metric_values["ap"].item()
     acc: float = metric_values["accuracy"].item()
+    recall: float = metric_values["recall"][1].item()
+    fnr: float = metric_values["fnr"].item()
 
     if return_predictions:
-        return acc, ap, auc, loss_meter.avg, predicted_scores
+        return acc, ap, auc, recall, fnr, loss_meter.avg, predicted_scores
     else:
-        return acc, ap, auc, loss_meter.avg
+        return acc, ap, auc, recall, fnr, loss_meter.avg 
 
 
 if __name__ == '__main__':

@@ -43,7 +43,8 @@ class Metrics:
                                          'precision': calculate_precision,
                                          'recall': calculate_recall,
                                          'f1': calculate_f1,
-                                         'accuracy': calculate_accuracy}
+                                         'accuracy': calculate_accuracy,
+                                         'fnr': calculate_fnr}
 
         # Internal state is a Confusion Matrix and a ROC calculator.
         self.confusion_matrix: torchmetrics.classification.BinaryConfusionMatrix = \
@@ -152,6 +153,11 @@ class Metrics:
             self.ap.reset()
         if self.mean_f1best:
             self.mean_f1best.reset()
+
+def calculate_fnr(conf_matrix: torch.Tensor, average=None):
+    fn = conf_matrix[1, 0]
+    tp = conf_matrix[1, 1]
+    return fn / (fn + tp)
 
 
 def calculate_accuracy(conf_matrix: torch.tensor, average=None) -> torch.tensor:
