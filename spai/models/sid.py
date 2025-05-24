@@ -631,6 +631,7 @@ class PatchBasedMFViT(nn.Module):
             (self.img_patch_size, self.img_patch_size),
             (self.img_patch_stride, self.img_patch_stride)
         )  # B x L x C x H x W
+        raise Exception("Not arbitrary res forward method used")
 
         patch_features: list[torch.Tensor] = []
         for i in range(x.size(1)):
@@ -659,50 +660,53 @@ class PatchBasedMFViT(nn.Module):
         :returns: A B x 1 tensor.
         """
         # Rearrange the patches from all images into a single tensor.
-        patched_images: list[torch.Tensor] = []
-        for img in x:
-            patched: torch.Tensor = utils.patchify_image(
-                img,
-                (self.img_patch_size, self.img_patch_size),
-                (self.img_patch_stride, self.img_patch_stride)
-            )  # 1 x L_i x C x H x W
-            if patched.size(1) < self.minimum_patches:
-                patched: tuple[torch.Tensor, ...] = five_crop(
-                    img, [self.img_patch_size, self.img_patch_size]
-                )
-                patched: torch.Tensor = torch.stack(patched, dim=1)
-            patched_images.append(patched)
-        x = patched_images
-        del patched_images
-        # x = [
-        #     utils.patchify_image(
-        #         img,
-        #         (self.img_patch_size, self.img_patch_size),
-        #         (self.img_patch_stride, self.img_patch_stride)
-        #     )  # 1 x L_i x C x H x W
-        #     for img in x
-        # ]
-        img_patches_num: list[int] = [img.size(1) for img in x]
-        x = torch.cat(x, dim=1)  # 1 x SUM(L_i) x C x H x W
-        x = x.squeeze(dim=0)  # SUM(L_i) x C x H x W
+        # FREEZE
+        with torch.no_grad():
+            patched_images: list[torch.Tensor] = []
+            for img in x:
+                patched: torch.Tensor = utils.patchify_image(
+                    img,
+                    (self.img_patch_size, self.img_patch_size),
+                    (self.img_patch_stride, self.img_patch_stride)
+                )  # 1 x L_i x C x H x W
+                if patched.size(1) < self.minimum_patches:
+                    patched: tuple[torch.Tensor, ...] = five_crop(
+                        img, [self.img_patch_size, self.img_patch_size]
+                    )
+                    patched: torch.Tensor = torch.stack(patched, dim=1)
+                patched_images.append(patched)
+            x = patched_images
+            del patched_images
+            # x = [
+            #     utils.patchify_image(
+            #         img,
+            #         (self.img_patch_size, self.img_patch_size),
+            #         (self.img_patch_stride, self.img_patch_stride)
+            #     )  # 1 x L_i x C x H x W
+            #     for img in x
+            # ]
+            img_patches_num: list[int] = [img.size(1) for img in x]
+            x = torch.cat(x, dim=1)  # 1 x SUM(L_i) x C x H x W
+            x = x.squeeze(dim=0)  # SUM(L_i) x C x H x W
 
-        # Process the patches in groups of feature_extraction_batch_size.
-        features: list[torch.Tensor] = []
-        for i in range(0, x.size(0), feature_extraction_batch_size):
-            features.append(self.mfvit(x[i:i+feature_extraction_batch_size]))
-        x = torch.cat(features, dim=0)  # SUM(L_i) x D
-        del features
+            # Process the patches in groups of feature_extraction_batch_size.
+            features: list[torch.Tensor] = []
+            for i in range(0, x.size(0), feature_extraction_batch_size):
+                features.append(self.mfvit(x[i:i+feature_extraction_batch_size]))
+            x = torch.cat(features, dim=0)  # SUM(L_i) x D
+            del features
 
-        # Attend to patches according to the image they belong to.
-        attended: list[torch.Tensor] = []
-        processed_sum: int = 0
-        for i in img_patches_num:
-            attended.append(self.patches_attention(x[processed_sum:processed_sum+i].unsqueeze(0)))
-            processed_sum += i
-        x = torch.cat(attended, dim=0)  # B x D
-        del attended
+            # Attend to patches according to the image they belong to.
+            attended: list[torch.Tensor] = []
+            processed_sum: int = 0
+            for i in img_patches_num:
+                attended.append(self.patches_attention(x[processed_sum:processed_sum+i].unsqueeze(0)))
+                processed_sum += i
+            x = torch.cat(attended, dim=0)  # B x D
+            del attended
 
-        x = self.norm(x)  # B x D
+            x = self.norm(x)  # B x D
+        
         x = self.cls_head(x)  # B x 1
 
         return x

@@ -141,6 +141,7 @@ def load_pretrained(
         logger.info(f">>>>>>>>>> Fine-tuned from {config.PRETRAINED} ..........")
     checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     checkpoint_model = checkpoint['model']
+    logger.warn(f"checkpoint_model {checkpoint_model.keys()}")
     checkpoint_epoch: Optional[int] = checkpoint.get('epoch', None)
 
     if any([True if 'encoder.' in k else False for k in checkpoint_model.keys()]):
@@ -163,6 +164,8 @@ def load_pretrained(
     else:
         raise NotImplementedError
 
+    # should be okay due to this https://docs.pytorch.org/tutorials/beginner/saving_loading_models.html#warmstarting-model-using-parameters-from-a-different-model
+    # TODO print?
     msg = model.load_state_dict(checkpoint_model, strict=False)
     if verbose:
         logger.info(msg)
