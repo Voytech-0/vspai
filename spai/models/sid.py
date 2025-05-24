@@ -70,6 +70,7 @@ class MambaPatchBasedMFViT(nn.Module):
             initialization_scope=initialization_scope
         )
         self.mamba = mamba
+        self.frozen_backbone = frozen_backbone
 
         self.img_patch_size: int = img_patch_size
         self.img_patch_stride: int = img_patch_stride
@@ -82,13 +83,16 @@ class MambaPatchBasedMFViT(nn.Module):
         self.scale = dim_head ** -0.5
         self.attend = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
-        self.to_kv = nn.Linear(cls_vector_dim, attn_embed_dim*2, bias=False)
-        self.patch_aggregator = nn.Parameter(torch.zeros((num_heads, 1, attn_embed_dim//num_heads)))
-        nn.init.trunc_normal_(self.patch_aggregator, std=.02)
-        self.to_out = nn.Sequential(
-            nn.Linear(attn_embed_dim, cls_vector_dim, bias=False),
-            nn.Dropout(dropout)
-        )
+        with torch.no_grad():
+            self.to_kv = nn.Linear(cls_vector_dim, attn_embed_dim*2, bias=False)
+            self.to_kv.weight.requires_grad = False
+            self.patch_aggregator = nn.Parameter(torch.zeros((num_heads, 1, attn_embed_dim//num_heads)), requires_grad=False)
+            nn.init.trunc_normal_(self.patch_aggregator, std=.02)
+            self.to_out = nn.Sequential(
+                nn.Linear(attn_embed_dim, cls_vector_dim, bias=False),
+                nn.Dropout(dropout)
+            )
+            self.to_out[0].weight.requires_grad = False
 
         self.norm = nn.LayerNorm(cls_vector_dim)
         self.cls_head = cls_head
@@ -194,7 +198,7 @@ class MambaPatchBasedMFViT(nn.Module):
             patched_video = torch.cat(patched_frames, dim = 0) # T x L_i x C x H x W
             patched_videos.append(patched_video)
         num_frames: int = min([vid.shape[0] for vid in patched_videos])
-        x = [vid[:num_frames] for vid in patched_videos] 
+        x = [vid[:num_frames] for vid in patched_videos]
         del patched_videos
         img_patches_num: list[int] = [img.size(1) for img in x]
         x = torch.cat(x, dim=1) # T x SUM(L_i) x C x H x W
@@ -226,23 +230,25 @@ class MambaPatchBasedMFViT(nn.Module):
         del attended
 
         x = x.transpose(0, 1) # B x T x D
-        x = self.mamba(x) # mamba layer to model sequence, 
+        x = self.mamba(x) # mamba layer to model sequence,
         x = x.mean(dim=1) # mean pool time dimension. # B x D
 
         # KEEP/REMOVE ?
         x = self.norm(x)  # B x D
-        
+
         x = self.cls_head(x)  # B x 1
 
         return x
-    
+
     def get_vision_transformer(self) -> vision_transformer.VisionTransformer:
         return self.mfvit.get_vision_transformer()
 
     def unfreeze_backbone(self) -> None:
+        self.frozen_backbone = False
         self.mfvit.unfreeze_backbone()
 
     def freeze_backbone(self) -> None:
+        self.frozen_backbone = True
         self.mfvit.freeze_backbone()
 
 
@@ -398,7 +404,7 @@ class PoolPatchBasedMFViT(nn.Module):
             patched_video = torch.cat(patched_frames, dim = 0) # T x L_i x C x H x W
             patched_videos.append(patched_video)
         num_frames: int = min([vid.shape[0] for vid in patched_videos])
-        x = [vid[:num_frames] for vid in patched_videos] 
+        x = [vid[:num_frames] for vid in patched_videos]
         del patched_videos
         img_patches_num: list[int] = [img.size(1) for img in x]
         x = torch.cat(x, dim=1) # T x SUM(L_i) x C x H x W
@@ -571,7 +577,7 @@ class PatchBasedMFViT(nn.Module):
         :param export_dirs:
         """
         if isinstance(x, torch.Tensor):
-            x =  self.forward_batch(x)
+            x = self.forward_batch(x)
         elif isinstance(x, list):
             if feature_extraction_batch_size is None:
                 feature_extraction_batch_size = len(x)
