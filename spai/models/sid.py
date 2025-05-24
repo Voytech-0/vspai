@@ -78,6 +78,7 @@ class MambaPatchBasedMFViT(nn.Module):
         self.cls_vector_dim: int = cls_vector_dim
 
         # Cross-Attention with a learnable vector layers.
+        # FREEZE
         dim_head: int = attn_embed_dim // num_heads
         self.heads = num_heads
         self.scale = dim_head ** -0.5
@@ -107,6 +108,9 @@ class MambaPatchBasedMFViT(nn.Module):
                     m.apply(_init_weights)
         else:
             raise TypeError(f"Non-supported weight initialization type: {initialization_scope}")
+        
+        for name, param in self.named_parameters():
+            print(name,param.requires_grad)
 
     def forward(
         self,
@@ -179,54 +183,56 @@ class MambaPatchBasedMFViT(nn.Module):
         :returns:  B x 1 tensor.
         """
         # Rearrange the patches from all videos and all frames into a single tensor.
-        patched_videos: list[torch.Tensor] = []
-        for video in x:
-            patched_frames: list[torch.Tensor] = []
-            for frame in video:
-                patched: torch.Tensor = utils.patchify_image(
-                    frame,
-                    (self.img_patch_size, self.img_patch_size),
-                    (self.img_patch_stride, self.img_patch_stride)
-                )  # 1 x L_i x C x H x W
-                if patched.size(1) < self.minimum_patches:
-                    patched: tuple[torch.Tensor, ...] = five_crop(
-                        frame, [self.img_patch_size, self.img_patch_size]
-                    )
-                    patched: torch.Tensor = torch.stack(patched, dim=1)
-                patched_frames.append(patched)
-            patched_video = torch.cat(patched_frames, dim = 0) # T x L_i x C x H x W
-            patched_videos.append(patched_video)
-        num_frames: int = min([vid.shape[0] for vid in patched_videos])
-        x = [vid[:num_frames] for vid in patched_videos]
-        del patched_videos
-        img_patches_num: list[int] = [img.size(1) for img in x]
-        x = torch.cat(x, dim=1) # T x SUM(L_i) x C x H x W
+        # FREEZE
+        with torch.no_grad():
+            patched_videos: list[torch.Tensor] = []
+            for video in x:
+                patched_frames: list[torch.Tensor] = []
+                for frame in video:
+                    patched: torch.Tensor = utils.patchify_image(
+                        frame,
+                        (self.img_patch_size, self.img_patch_size),
+                        (self.img_patch_stride, self.img_patch_stride)
+                    )  # 1 x L_i x C x H x W
+                    if patched.size(1) < self.minimum_patches:
+                        patched: tuple[torch.Tensor, ...] = five_crop(
+                            frame, [self.img_patch_size, self.img_patch_size]
+                        )
+                        patched: torch.Tensor = torch.stack(patched, dim=1)
+                    patched_frames.append(patched)
+                patched_video = torch.cat(patched_frames, dim = 0) # T x L_i x C x H x W
+                patched_videos.append(patched_video)
+            num_frames: int = min([vid.shape[0] for vid in patched_videos])
+            x = [vid[:num_frames] for vid in patched_videos]
+            del patched_videos
+            img_patches_num: list[int] = [img.size(1) for img in x]
+            x = torch.cat(x, dim=1) # T x SUM(L_i) x C x H x W
 
-        # Process the patches in groups of feature_extraction_batch_size.
-        features: list[list[torch.Tensor]] = []
-        for t in range(0, x.size(0)):
-            features_t = []
-            for i in range(0, x.size(1), feature_extraction_batch_size):
-                features_t.append(self.mfvit(x[t, i:i+feature_extraction_batch_size]))
-            features.append(features_t)
+            # Process the patches in groups of feature_extraction_batch_size.
+            features: list[list[torch.Tensor]] = []
+            for t in range(0, x.size(0)):
+                features_t = []
+                for i in range(0, x.size(1), feature_extraction_batch_size):
+                    features_t.append(self.mfvit(x[t, i:i+feature_extraction_batch_size]))
+                features.append(features_t)
 
-        features = torch.stack([torch.stack(features_t, dim = 0) for features_t in features], dim = 0)
+            features = torch.stack([torch.stack(features_t, dim = 0) for features_t in features], dim = 0)
 
-        x = features.squeeze(1)  # T x SUM(L_i) x D
-        del features
+            x = features.squeeze(1)  # T x SUM(L_i) x D
+            del features
 
-        # Attend to patches according to the image they belong to.
-        attended: list[list[torch.Tensor]] = []
-        for t in range(x.size(0)):
-            attended_t = []
-            processed_sum: int = 0
-            for i in img_patches_num:
-                attended_t.append(self.patches_attention(x[t, processed_sum:processed_sum+i].unsqueeze(0)))
-                processed_sum += i
-            attended.append(attended_t)
+            # Attend to patches according to the image they belong to.
+            attended: list[list[torch.Tensor]] = []
+            for t in range(x.size(0)):
+                attended_t = []
+                processed_sum: int = 0
+                for i in img_patches_num:
+                    attended_t.append(self.patches_attention(x[t, processed_sum:processed_sum+i].unsqueeze(0)))
+                    processed_sum += i
+                attended.append(attended_t)
 
-        x = torch.stack([torch.cat(attended_t, dim = 0) for attended_t in attended], dim = 0) # T x B x D
-        del attended
+            x = torch.stack([torch.cat(attended_t, dim = 0) for attended_t in attended], dim = 0) # T x B x D
+            del attended
 
         x = x.transpose(0, 1) # B x T x D
         x = self.mamba(x) # mamba layer to model sequence,
@@ -288,18 +294,21 @@ class PoolPatchBasedMFViT(nn.Module):
         self.cls_vector_dim: int = cls_vector_dim
 
         # Cross-Attention with a learnable vector layers.
+        # FREEZE
         dim_head: int = attn_embed_dim // num_heads
         self.heads = num_heads
         self.scale = dim_head ** -0.5
         self.attend = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.to_kv = nn.Linear(cls_vector_dim, attn_embed_dim*2, bias=False)
-        self.patch_aggregator = nn.Parameter(torch.zeros((num_heads, 1, attn_embed_dim//num_heads)))
+        self.to_kv.weight.requires_grad = not self.frozen_backbone
+        self.patch_aggregator = nn.Parameter(torch.zeros((num_heads, 1, attn_embed_dim//num_heads)), requires_grad=not self.frozen_backbone)
         nn.init.trunc_normal_(self.patch_aggregator, std=.02)
         self.to_out = nn.Sequential(
             nn.Linear(attn_embed_dim, cls_vector_dim, bias=False),
             nn.Dropout(dropout)
         )
+        self.to_out[0].weight.requires_grad = not self.frozen_backbone
 
         self.norm = nn.LayerNorm(cls_vector_dim)
         self.cls_head = cls_head
@@ -383,53 +392,55 @@ class PoolPatchBasedMFViT(nn.Module):
         :returns:  B x 1 tensor.
         """
         # Rearrange the patches from all videos and all frames into a single tensor.
-        patched_videos: list[torch.Tensor] = []
-        for video in x:
-            video = video.squeeze(0)
-            patched_frames: list[torch.Tensor] = []
-            for frame in video:
-                frame = frame.unsqueeze(0)
-                patched: torch.Tensor = utils.patchify_image(
-                    frame,
-                    (self.img_patch_size, self.img_patch_size),
-                    (self.img_patch_stride, self.img_patch_stride)
-                )  # 1 x L_i x C x H x W
-                if patched.size(1) < self.minimum_patches:
-                    patched: tuple[torch.Tensor, ...] = five_crop(
-                        frame, [self.img_patch_size, self.img_patch_size]
-                    )
-                    patched: torch.Tensor = torch.stack(patched, dim=1)
-                patched_frames.append(patched)
-            patched_video = torch.cat(patched_frames, dim = 0) # T x L_i x C x H x W
-            patched_videos.append(patched_video)
-        num_frames: int = min([vid.shape[0] for vid in patched_videos])
-        x = [vid[:num_frames] for vid in patched_videos]
-        del patched_videos
-        img_patches_num: list[int] = [img.size(1) for img in x]
-        x = torch.cat(x, dim=1) # T x SUM(L_i) x C x H x W
+        # FREEZE
+        with torch.no_grad():
+            patched_videos: list[torch.Tensor] = []
+            for video in x:
+                video = video.squeeze(0)
+                patched_frames: list[torch.Tensor] = []
+                for frame in video:
+                    frame = frame.unsqueeze(0)
+                    patched: torch.Tensor = utils.patchify_image(
+                        frame,
+                        (self.img_patch_size, self.img_patch_size),
+                        (self.img_patch_stride, self.img_patch_stride)
+                    )  # 1 x L_i x C x H x W
+                    if patched.size(1) < self.minimum_patches:
+                        patched: tuple[torch.Tensor, ...] = five_crop(
+                            frame, [self.img_patch_size, self.img_patch_size]
+                        )
+                        patched: torch.Tensor = torch.stack(patched, dim=1)
+                    patched_frames.append(patched)
+                patched_video = torch.cat(patched_frames, dim = 0) # T x L_i x C x H x W
+                patched_videos.append(patched_video)
+            num_frames: int = min([vid.shape[0] for vid in patched_videos])
+            x = [vid[:num_frames] for vid in patched_videos]
+            del patched_videos
+            img_patches_num: list[int] = [img.size(1) for img in x]
+            x = torch.cat(x, dim=1) # T x SUM(L_i) x C x H x W
 
-        # Process the patches in groups of feature_extraction_batch_size.
-        features: list[list[torch.Tensor]]= []
-        for t in range(0, x.size(0)):
-            features_t = []
-            for i in range(0, x.size(1), feature_extraction_batch_size):
-                features_t.append(self.mfvit(x[t, i:i+feature_extraction_batch_size]))
-            features.append(features_t)
+            # Process the patches in groups of feature_extraction_batch_size.
+            features: list[list[torch.Tensor]]= []
+            for t in range(0, x.size(0)):
+                features_t = []
+                for i in range(0, x.size(1), feature_extraction_batch_size):
+                    features_t.append(self.mfvit(x[t, i:i+feature_extraction_batch_size]))
+                features.append(features_t)
 
-        features = torch.stack([torch.stack(features_t, dim = 0) for features_t in features], dim = 0)
+            features = torch.stack([torch.stack(features_t, dim = 0) for features_t in features], dim = 0)
 
-        x = features.squeeze(1) # T x SUM(L_i) x D
-        del features
+            x = features.squeeze(1) # T x SUM(L_i) x D
+            del features
 
-        # Attend to patches according to the image they belong to.
-        attended: list[list[torch.Tensor]] = []
-        for t in range(x.size(0)):
-            attended_t = []
-            processed_sum: int = 0
-            for i in img_patches_num:
-                attended_t.append(self.patches_attention(x[t, processed_sum:processed_sum+i].unsqueeze(0)))
-                processed_sum += i
-            attended.append(attended_t)
+            # Attend to patches according to the image they belong to.
+            attended: list[list[torch.Tensor]] = []
+            for t in range(x.size(0)):
+                attended_t = []
+                processed_sum: int = 0
+                for i in img_patches_num:
+                    attended_t.append(self.patches_attention(x[t, processed_sum:processed_sum+i].unsqueeze(0)))
+                    processed_sum += i
+                attended.append(attended_t)
 
         # mean pooling over time
         x = torch.stack([torch.cat(attended_t, dim = 0) for attended_t in attended], dim = 0).mean(dim = 0) # B x D
@@ -931,6 +942,7 @@ class MFViT(nn.Module):
         hi_freq = self.backbone_norm(hi_freq)
 
         if self.frozen_backbone:
+            # FREEZE
             with torch.no_grad():
                 x, low_freq, hi_freq = self._extract_features(x, low_freq, hi_freq)
                 x = self.features_processor(x, low_freq, hi_freq)
@@ -1142,6 +1154,7 @@ class ClassificationVisionTransformer(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.frozen_backbone:
             with torch.no_grad():
+                # FREEZE
                 x = self.vit(x)
                 x = self.features_processor(x)
         else:
