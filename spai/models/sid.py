@@ -1737,10 +1737,19 @@ def build_mf_vit(config) -> MFViT:
         elif config.DATA.AGGREGATION == "mamba":
             mamba_config = MambaConfig(d_model=cls_vector_dim, n_layers=1)
             mamba = Mamba(mamba_config)
+
+            # TODO ugly code but works?
+            cls_head_mamba = ClassificationHead(
+                input_dim=cls_vector_dim,
+                num_classes=config.MODEL.NUM_CLASSES if config.MODEL.NUM_CLASSES > 2 else 1,
+                mlp_ratio=config.MODEL.CLS_HEAD.MLP_RATIO,
+                dropout=config.MODEL.SID_DROPOUT
+            )
+
             model = MambaPatchBasedMFViT(
                 vit,
                 fre,
-                mamba,
+                cls_head_mamba,
                 cls_head,
                 masking_radius=config.MODEL.FRE.MASKING_RADIUS,
                 img_patch_size=config.DATA.IMG_SIZE,
