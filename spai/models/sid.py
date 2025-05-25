@@ -1749,8 +1749,8 @@ def build_mf_vit(config) -> MFViT:
             model = MambaPatchBasedMFViT(
                 vit,
                 fre,
+                mamba,
                 cls_head_mamba,
-                cls_head,
                 masking_radius=config.MODEL.FRE.MASKING_RADIUS,
                 img_patch_size=config.DATA.IMG_SIZE,
                 img_patch_stride=config.MODEL.PATCH_VIT.PATCH_STRIDE,
