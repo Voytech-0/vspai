@@ -1,41 +1,78 @@
-# SPAI: Spectral AI-Generated Image Detector
-__Official code repository for the CVPR2025 paper [Any-Resolution AI-Generated Image Detection by Spectral Learning](https://arxiv.org/abs/2411.19417).__
+# SPAV: Video SPAI
 
 <div align="center";">
 
-**Dimitrios Karageorgiou<sup>1,2</sup>, Symeon Papadopoulos<sup>1</sup>, Ioannis Kompatsiaris<sup>1</sup>, Efstratios Gavves<sup>2,3</sup>**
+[//]: # (**Name Surname<sup>1</sup>, Name Surname<sup>1</sup>)
 
-<sup>1</sup> Information Technologies Institute, CERTH, Greece  
-<sup>2</sup> University of Amsterdam, The Netherlands  
-<sup>3</sup> Archimedes/Athena RC, Greece
+<sup>1</sup> University of Amsterdam, The Netherlands  
 
 </div>
 
-<p align="center">
-    <img src="docs/overview.svg" alt="Paper Overview" />
-</p>
+[//]: # (<p align="center">)
 
-**SPAI employs spectral learning to learn the spectral distribution of real 
+[//]: # (    <img src="docs/overview.svg" alt="Paper Overview" />)
+
+[//]: # (</p>)
+
+**VSPAI is built on top of SPAI, which employs spectral learning to learn the spectral distribution of real 
 images under a self-supervised setup. Then, using the spectral 
 reconstruction similarity it detects AI-generated images as out-of-distribution 
 samples of this learned model.**
 
-### :newspaper: News
+Recent video generation models use Latent Diffusion Models (LDMs) for high-fidelity, 
+temporally coherent content. Detection methods like DeMamba and UNITE focus on spatial-temporal artifacts, 
+while SPAI uses frequency-domain analysis for images. We extend SPAI's approach to videos for improved detection.
 
-- 28/03/25: Code released.
-- 27/02/25: Paper accepted on CVPR2025.
+SPAI was chosen as a base of the project because of its innovative approach of learning the distribution
+of real images, as opposed to AI-generated ones.
+
+Our contribution involves developping three ways of extending SPAI to videos, fine-tuning them and testing on a diverse 
+dataset covering vast selection of generator architectures, resolutions, and scope.
+
+The results of the paper are best summarise by the following table:
+# Benchmark Performance
+
+| Model         | Metric | Sora  | CogVideoX | Gen-2 | LaVie | ModelScope | VideoCrafter1 | AVG   |
+|---------------|--------|-------|-----------|-------|-------|------------|---------------|-------|
+| MViT          | Acc    | 78.6  | **71.2**  | **89.7** | 85.2  | 75.5       | 89.6          | 81.6  |
+|               | AP     | **89.2** | **85.2**  | **96.2** | 93.3  | 88.3       | 96.5          | **91.5** |
+|               | R      | 68.8  | 54.0      | 91.0   | 82.0  | 62.6       | 90.8          | 74.9  |
+| Video Swin    | Acc    | 68.4  | 62.5      | 86.2   | 79.8  | 61.8       | 86.1          | 74.1  |
+|               | AP     | 83.8  | 80.7      | 94.8   | 90.5  | 79.8       | 94.4          | 87.4  |
+|               | R      | 44.4  | 32.6      | 80.0   | 67.2  | 31.2       | 79.8          | 55.9  |
+| VSPAI-1       | Acc    | 64.6  | 54.5      | 81.4   | 89.2  | 77.1       | 93.9          | 78.8  |
+|               | AP     | 79.7  | 63.9      | 92.1   | 96.0  | 90.2       | 98.3          | 86.7  |
+|               | R      | 34.8  | 14.6      | 68.4   | 84.0  | 59.8       | 93.4          | 59.2  |
+| VSPAI-Mean    | Acc    | 73.2  | 57.5      | 87.4   | 85.6  | 79.5       | 93.3          | 79.4  |
+|               | AP     | 84.3  | 65.7      | 94.3   | 93.6  | 89.7       | 98.2          | 87.6  |
+|               | R      | 55.0  | 23.4      | 83.2   | 79.5  | 67.5       | 95.4          | 67.3  |
+| VSPAI-1-FT    | Acc    | 72.1  | 61.2      | 81.6   | 81.8  | 80.4       | 84.0          | 76.8  |
+|               | AP     | 80.4  | 64.1      | 92.5   | 96.3  | 90.4       | 98.5          | 87.0  |
+|               | R      | 75.8  | 54.0      | 94.8   | 95.2  | 92.4       | 99.6          | 85.3  |
+| VSPAI-N (Pool)| Acc    | 77.5  | 65.5      | 82.9   | 81.3  | 80.4       | 83.0          | 78.4  |
+|               | AP     | 85.7  | 69.7      | 95.5   | **96.1** | **91.4**   | **98.6**        | 89.5  |
+|               | R      | **88.0** | **64.2**  | **98.8** | **95.8** | **94.0**   | **99.2**        | **90.0** |
+| VSPAI-N (Mamba)| Acc    | **80.5** | 63.7      | 89.4   | **87.2** | **82.7**   | **91.0**        | **82.4** |
+|               | AP     | 86.7  | 71.0      | 95.5   | 94.4  | 90.6       | 97.4          | 89.3  |
+|               | R      | 75.2  | 41.6      | 93.0   | 88.6  | 79.8       | 96.2          | 79.1  |
+
+> The table above summarizes the Accuracy \(Acc\), Average Precision \(AP\), and Recall \(R\) scores for each detection method, averaged across four real video sources. The highest values across the options are highlighted in **bold**.
+
+### Conculsion
+
+### Individual Contribution:
+- Stipe Frković: Implementing Mamba Architecture
+- Izabela Kurek: Testing the developed models
+- Lucia Šikulová: Benchmarks
+- Wojciech Trejter: Fine-tuning
 
 ## :hammer: Installation
 
-### Hardware requirements
+[//]: # (### Hardware requirements)
 
-The code originally targeted Nvidia L40S 48GB GPU, however many recent cuda-enabled GPUs should be
-supported. Inference should be effortless performed with less than 8GB of GPU RAM. As training originally
-targeted a 48GB GPU, a suitable GPU should be presented to reproduce the paper's setup
-without further modifications of the code. 
 
 ### Required libraries
-To train and evaluate SPAI an anaconda environment can be used for installing all the 
+To train and evaluate VSPAI an anaconda environment can be used for installing all the 
 required dependencies as following:
 
 ```bash
@@ -45,140 +82,11 @@ conda install pytorch torchvision torchaudio pytorch-cuda=12.4 -c pytorch -c nvi
 pip install -r requirements.txt
 ```
 
-Furthermore, the installation of [Nvidia APEX](https://github.com/NVIDIA/apex) is required for training.  
-
 ### Weights Checkpoint
 
-The trained weights checkpoint can be downloaded [here](https://drive.google.com/file/d/1vvXmZqs6TVJdj8iF1oJ4L_fcgdQrp_YI/view?usp=sharing) 
+The trained SPAI weights checkpoint can be downloaded [here](https://drive.google.com/file/d/1vvXmZqs6TVJdj8iF1oJ4L_fcgdQrp_YI/view?usp=sharing) 
 and should be placed under the `weights` directory, located under the project's root directory.
 
-## :fire: Inference
-
-To compute the predicted scores for a set of images, place them under a directory
-and use the following command.
-
-```bash
-python -m spai --input <input_dir> --output <output_dir>
-```
-
-where:
-- `input_dir`: is a directory where the input images are located,
-- `output_dir`: is a directory where a csv file with the predictions will be written.
-
-The `--input` option also accepts CSV files containing the paths of the images. The CSV
-files of the evaluation set, included under the `data` directory, can be used as examples.
-For downloading the images of these evaluation CSVs, check the instruction [here](docs/data.md).
-
-## :triangular_ruler: Architecture Overview
-
-<p align="center">
-    <img src="docs/architecture.svg" alt="Overview of the SPAI architecture" />
-</p>
-
-We learn a model of the spectral distribution of real images under a self-supervised setup using
-masked spectral learning. Then, we use the spectral reconstruction similarity to measure the divergence from this learned distribution and
-detect AI-generated images as out-of-distribution samples of this model. Spectral context vector captures the spectral context under which
-the spectral reconstruction similarity values are computed, while spectral context attention enables the processing of any-resolution images
-for capturing subtle spectral inconsistencies.
-
-## :muscle: Training
-
-### Required pre-trained model
-Download the pre-trained ViT-B/16 MFM model from its [public repo](https://github.com/Jiahao000/MFM)
-and place it under the `weights` directory:
-```txt
-weights
-|_ mfm_pretrain_vit_base.pth
-```
-
-### Required data
-Latent diffusion training and validation data can be downloaded from their corresponding [repo](https://github.com/grip-unina/DMimageDetection).
-Furthermore, the corresponding instructions for downloading COCO and LSUN should be followed. 
-They should be placed under the `datasets` directory as following:
-```txt
-datasets
-|_latent_diffusion_trainingset
-  |_train
-    ...
-  |_val
-    ...
-|_COCO
-  ...
-|_LSUN
-  ...
-```
-
-Then, a csv file describing these data should be created as following:
-
-```bash
-python spai/create_dmid_ldm_train_val_csv.py \
-  --train_dir "./datasets/latent_diffusion_trainingset/train" \
-  --val_dir "./datasets/latent_diffusion_trainingset/val" \
-  --coco_dir "./datasets/COCO" \
-  --lsun_dir "./datasets/LSUN" \
-  -o "./datasets/ldm_train_val.csv"
-```
-
-The validation split can be augmented as following:
-
-```bash
-python spai/tools/augment_dataset.py \
-  --cfg ./configs/vit_base/vit_base__multipatch__100ep__intermediate__restore__patch_proj_per_feature__last_proj_layer_no_activ__fre_orig_branch__all_layers__bce_loss__light_augmentations.yaml \
-  -c ./datasets/ldm_val.csv \
-  -o ./datasets/ldm_val_augm.csv \
-  -d ./datasets/latent_diffusion_trainingset_augm
-```
-
-Then, training can be performed as following:
-
-```bash
-python -m spai train \
-  --cfg "./configs/spai.yaml" \
-  --batch-size 72 \
-  --pretrained "./weights/mfm_pretrain_vit_base.pth" \
-  --output "./output/train" \
-  --data-path "./datasets/ldm_train_val.csv" \
-  --tag "spai" \
-  --amp-opt-level "O2" \
-  --data-workers 8 \
-  --save-all \
-  --opt "DATA.VAL_BATCH_SIZE" "256" \
-  --opt "MODEL.FEATURE_EXTRACTION_BATCH" "400" \
-  --opt "DATA.TEST_PREFETCH_FACTOR" "1"
-```
-
-## :mag_right: Evaluation
-
-When a model has been trained using the previous script, it can be evaluated as following:
-
-```bash
-python -m spai test \
-  --cfg "./configs/spai.yaml" \
-  --batch-size 8 \
-  --model "./output/train/finetune/spai/<epoch_name>.pth" \
-  --output "./output/spai/test" \
-  --tag "spai" \
-  --opt "MODEL.PATCH_VIT.MINIMUM_PATCHES" "4" \
-  --opt "DATA.NUM_WORKERS" "8" \
-  --opt "MODEL.FEATURE_EXTRACTION_BATCH" "400" \
-  --opt "DATA.TEST_PREFETCH_FACTOR" "1" \
-  --test-csv "<test_csv_path>"
-```
-
-where:
-- `test_csv_path`: Path to a csv file including the paths of the testing data.
-- `epoch_name`: Filename of the epoch selected during validation. 
-
-## :star2: Acknowledgments
-
-This work was partly supported by the Horizon Europe
-projects [ELIAS](https://elias-ai.eu/) (grant no. 101120237) and [vera.ai](https://www.veraai.eu/home) (grant
-no. 101070093). The computational resources were granted
-with the support of [GRNET](https://grnet.gr/en/).
-
-Pieces of code from the [MFM](https://github.com/Jiahao000/MFM) project 
-have been used as a basis for developing this project. We thank its 
-authors for their contribution.
 
 ## :black_nib: License & Contact
 
@@ -189,18 +97,3 @@ before use.
 
 The source code and model weights of this project are released under 
 the [Apache 2 License](https://www.apache.org/licenses/LICENSE-2.0).
-
-For any question you can contact [d.karageorgiou@uva.nl](mailto:d.karageorgiou@uva.nl). 
-
-## :scroll: Citation
-
-If you found this work useful for your research, you can cite the following paper:
-
-```text
-@article{karageorgiou2025any,
-  title={Any-Resolution AI-Generated Image Detection by Spectral Learning},
-  author={Karageorgiou, Dimitrios and Papadopoulos, Symeon and Kompatsiaris, Ioannis and Gavves, Efstratios},
-  journal={IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
-  year={2025}
-}
-```
