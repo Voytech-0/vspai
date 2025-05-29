@@ -1,3 +1,5 @@
 image,class,split
-data/cat.mp4,0,test
-data/ai.mp4,1,test
+data/cat.mp4,0,train
+data/ai.mp4,1,train
+data/cat.mp4,0,val
+data/ai.mp4,1,val

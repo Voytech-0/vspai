@@ -25,7 +25,7 @@ from PIL import Image
 from torchvision.io import read_image
 
 from spai.data import filestorage
-from spai.data.video_loader import get_frame, get_num_frames
+from spai.data.video_loader import get_frame, get_num_frames, video_subsample
 
 
 class DataReader:
@@ -60,6 +60,9 @@ class DataReader:
     def num_frames(self, path: str):
         return get_num_frames(path)
 
+    def subsample(self, path: str):
+        return video_subsample(path)
+
 
 class FileSystemReader(DataReader):
     """Reader that maps relative paths to absolute paths of the filesystem."""
@@ -83,7 +86,7 @@ class FileSystemReader(DataReader):
         try:
             # check whether it is a video
             if self.is_video:
-                # read the first frame of the video
+                # read the frame of the video
                 image = get_frame(str(self.root_path / path), idx)
             else:
                 # it's an image

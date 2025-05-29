@@ -28,6 +28,9 @@ import neptune
 import cv2
 import click
 import torch
+from torch.cuda.amp import GradScaler, autocast
+
+scaler = GradScaler()
 import torch.backends.cudnn as cudnn
 import torch.utils.data
 import yacs
@@ -60,7 +63,7 @@ from spai import data_utils
 
 try:
     # noinspection PyUnresolvedReferences
-    from apex import amp
+    from torch import amp
 except ImportError:
     amp = None
 
@@ -131,6 +134,8 @@ def cli() -> None:
 @click.option("--data-prefetch-factor", type=int)
 @click.option("--save-all", is_flag=True)
 @click.option("--opt", "extra_options", type=(str, str), multiple=True)
+@click.option("--data_type", type=str, default="image")
+@click.option("--aggregation", type=str, default="first")
 def train(
     cfg: Path,
     batch_size: Optional[int],
@@ -152,6 +157,8 @@ def train(
     disable_pin_memory: bool,
     data_prefetch_factor: Optional[int],
     save_all: bool,
+    data_type: str,
+    aggregation: str,
     extra_options: tuple[str, str]
 ) -> None:
     if csv_root_dir is None:
@@ -176,6 +183,8 @@ def train(
         "data_workers": data_workers,
         "disable_pin_memory": disable_pin_memory,
         "data_prefetch_factor": data_prefetch_factor,
+        "data_type": data_type,
+        "aggregation": aggregation,
         "opts": extra_options
     })
     if 'LOCAL_RANK' not in os.environ:
@@ -235,8 +244,9 @@ def train(
     logger.info(str(model))
 
     optimizer = build_optimizer(config, model, logger, is_pretrain=False)
-    if config.AMP_OPT_LEVEL != "O0":
-        model, optimizer = amp.initialize(model, optimizer, opt_level=config.AMP_OPT_LEVEL)
+    use_amp = config.AMP_OPT_LEVEL != "O0"
+    global scaler
+    scaler = GradScaler() if use_amp else None
     model_without_ddp = model
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -250,7 +260,8 @@ def train(
     logger.info(f"Loss: \n{criterion}")
 
     if config.PRETRAINED:
-        load_pretrained(config, model_without_ddp.get_vision_transformer(), logger)
+        model_ckpt: pathlib.Path = find_pretrained_checkpoints(config)[0]
+        load_pretrained(config, model_without_ddp, logger, checkpoint_path=model_ckpt)
     else:
         model_without_ddp.unfreeze_backbone()
         logger.info(f"No pretrained model. Backbone parameters are trainable.")
@@ -357,6 +368,8 @@ def test(
         "opts": extra_options
     })
 
+    print(config.MODEL.SID_APPROACH)
+
     pathlib.Path(config.OUTPUT).mkdir(exist_ok=True, parents=True)
     global logger
     logger = create_logger(output_dir=config.OUTPUT, dist_rank=0, name=f"{config.MODEL.NAME}")
@@ -396,7 +409,7 @@ def test(
                 logger.info(f"Number of GFLOPs: {flops / 1e9}")
 
         checkpoint_epoch: int = load_pretrained(config, model, logger,
-                                                checkpoint_path=model_ckpt, verbose=i==0)
+                                                checkpoint_path=model_ckpt, verbose=i == 0)
 
         # Test the model.
         for test_data_loader, test_dataset, test_data_name in zip(test_loaders,
@@ -404,12 +417,12 @@ def test(
                                                                   test_datasets_names):
             predictions: Optional[dict[int, tuple[float, Optional[AttentionMask]]]] = None
             if update_csv:
-                acc, ap, auc, loss, predictions = validate(
+                acc, ap, auc, recall, fnr, loss, predictions = validate(
                     config, test_data_loader, model, criterion, neptune_run,
                     return_predictions=True
                 )
             else:
-                acc, ap, auc, loss = validate(config, test_data_loader,
+                acc, ap, auc, recall, fnr, loss = validate(config, test_data_loader,
                                               model, criterion, neptune_run)
             logger.info(f"Test | {test_data_name} | Epoch {checkpoint_epoch} | "
                         f"Images: {len(test_dataset)} | loss: {loss:.4f}")
@@ -419,10 +432,16 @@ def test(
                         f"Images: {len(test_dataset)} | AP: {ap:.3f}")
             logger.info(f"Test | {test_data_name} | Epoch {checkpoint_epoch}  | "
                         f"Images: {len(test_dataset)} | AUC: {auc:.3f}")
+            logger.info(f"Test | {test_data_name} | Epoch {checkpoint_epoch}  | "
+                        f"Images: {len(test_dataset)} | Recall: {recall:.3f}")
+            logger.info(f"Test | {test_data_name} | Epoch {checkpoint_epoch}  | "
+                        f"Images: {len(test_dataset)} | FNR: {fnr:.3f}")
             neptune_run[f"test/{test_data_name}/acc"].append(acc, step=checkpoint_epoch)
             neptune_run[f"test/{test_data_name}/ap"].append(ap, step=checkpoint_epoch)
             neptune_run[f"test/{test_data_name}/auc"].append(auc, step=checkpoint_epoch)
             neptune_run[f"test/{test_data_name}/loss"].append(loss, step=checkpoint_epoch)
+            neptune_run[f"test/{test_data_name}/recall"].append(recall, step=checkpoint_epoch)
+            neptune_run[f"test/{test_data_name}/fnr"].append(fnr, step=checkpoint_epoch)
 
             if predictions is not None:
                 column_name: str = f"{tag}_epoch_{checkpoint_epoch}"
@@ -442,6 +461,7 @@ def test(
             log_writer.flush()
         if neptune_run is not None:
             neptune_run.sync()
+
 
 @cli.command()
 @click.option("--cfg", default="./configs/spai.yaml", show_default=True,
@@ -543,7 +563,7 @@ def infer(
                                                                           test_datasets_names,
                                                                           input_paths):
         predictions: Optional[dict[int, tuple[float, Optional[AttentionMask]]]]
-        acc, ap, auc, loss, predictions = validate(
+        acc, ap, auc, recall, fnr, loss, predictions = validate(
             config, test_data_loader, model, criterion, None, return_predictions=True
         )
 
@@ -905,7 +925,7 @@ def train_model(
         ap: float
         auc: float
         loss: float
-        acc, ap, auc, loss = validate(config, data_loader_val, model, criterion, neptune_run)
+        acc, ap, auc, recall, fnr, loss = validate(config, data_loader_val, model, criterion, neptune_run)
         logger.info(f"Val | Epoch {epoch} | Images: {len(dataset_val)} | loss: {loss:.4f}")
         logger.info(f"Val | Epoch {epoch} | Images: {len(dataset_val)} | ACC: {acc:.3f}")
         logger.info(f"Val | Epoch {epoch} | Images: {len(dataset_val)} | AP: {ap:.3f}")
@@ -923,7 +943,7 @@ def train_model(
         logger.info(f"Val | Min loss: {min(val_loss_per_epoch):.4f} "
                     f"| Epoch: {config.TRAIN.START_EPOCH + np.argmin(val_loss_per_epoch)}")
         logger.info(f"Val | Max ACC: {max(val_accuracy_per_epoch):.3f} "
-                    f"| Epoch: {config.TRAIN.START_EPOCH+np.argmax(val_accuracy_per_epoch)}")
+                    f"| Epoch: {config.TRAIN.START_EPOCH + np.argmax(val_accuracy_per_epoch)}")
         logger.info(f"Val | Max AP: {max(val_ap_per_epoch):.3f} "
                     f"| Epoch: {config.TRAIN.START_EPOCH + np.argmax(val_ap_per_epoch)}")
         logger.info(f"Val | Max AUC: {max(val_auc_per_epoch):.3f} "
@@ -938,7 +958,7 @@ def train_model(
         for test_data_loader, test_dataset, test_data_name in zip(data_loaders_test,
                                                                   datasets_test,
                                                                   datasets_test_names):
-            acc, ap, auc, loss = validate(config, test_data_loader, model,
+            acc, ap, auc, recall, fnr, loss = validate(config, test_data_loader, model,
                                           criterion, neptune_run)
             logger.info(f"Test | {test_data_name} | Epoch {epoch} | Images: {len(test_dataset)} "
                         f"| loss: {loss:.4f}")
@@ -982,7 +1002,7 @@ def train_one_epoch(
     model.train()
     criterion.train()
     optimizer.zero_grad()
-    
+
     logger.info(
         "Current learning rate for different parameter groups: "
         f"{[it['lr'] for it in optimizer.param_groups]}"
@@ -1007,14 +1027,23 @@ def train_one_epoch(
             negative_outputs = model(negative)
         else:
             samples, targets, _ = batch
-            batch_size: int = samples.size(0)
-            samples = samples.cuda(non_blocking=True)
+            if config.DATA.AGGREGATION not in ["simple", "mamba"]:
+                batch_size: int = samples.size(0)
+                samples = samples.cuda(non_blocking=True)
+            else:
+                batch_size: int = len(samples)
+                samples = [sample.cuda(non_blocking=True) for sample in samples]
             targets = targets.cuda(non_blocking=True)
             # Forward pass each augmented view of the batch separately in order to not
             # significantly increase memory requirements.
-            outputs_views: list[torch.Tensor] = [
-                model(samples[:, i, :, :, :]) for i in range(samples.size(1))
-            ]
+            if config.DATA.AGGREGATION not in  ["simple", "mamba"]:
+                outputs_views: list[torch.Tensor] = [
+                    model(samples[:, i, :, :, :]) for i in range(samples.size(1))
+                ]
+            else:
+                outputs_views: list[torch.Tensor] = [
+                    model(samples, config.MODEL.FEATURE_EXTRACTION_BATCH)
+                ]
             outputs: torch.Tensor = torch.stack(outputs_views, dim=1)
             outputs = outputs if outputs.size(dim=1) > 1 else outputs.squeeze(dim=1)
 
@@ -1028,12 +1057,13 @@ def train_one_epoch(
                 loss = criterion(outputs, targets)
             loss = loss / config.TRAIN.ACCUMULATION_STEPS
             if config.AMP_OPT_LEVEL != "O0":
-                with amp.scale_loss(loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
+                scaled_loss = scaler.scale(loss)
+
+                scaled_loss.backward()
                 if config.TRAIN.CLIP_GRAD:
-                    grad_norm = torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), config.TRAIN.CLIP_GRAD)
+                    grad_norm = torch.nn.utils.clip_grad_norm_(optimizer.param_groups[0]['params'], config.TRAIN.CLIP_GRAD)
                 else:
-                    grad_norm = get_grad_norm(amp.master_params(optimizer))
+                    grad_norm = get_grad_norm(optimizer.param_groups[0]['params'])
             else:
                 loss.backward()
                 if config.TRAIN.CLIP_GRAD:
@@ -1051,14 +1081,14 @@ def train_one_epoch(
                 loss = criterion(outputs.squeeze(), targets)
             optimizer.zero_grad()
             if config.AMP_OPT_LEVEL != "O0":
-                with amp.scale_loss(loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
+                scaled_loss = scaler.scale(loss)
+                scaled_loss.backward()
                 if config.TRAIN.CLIP_GRAD:
                     grad_norm = torch.nn.utils.clip_grad_norm_(
-                        amp.master_params(optimizer), config.TRAIN.CLIP_GRAD
+                        optimizer.param_groups[0]['params'], config.TRAIN.CLIP_GRAD
                     )
                 else:
-                    grad_norm = get_grad_norm(amp.master_params(optimizer))
+                    grad_norm = get_grad_norm(optimizer.param_groups[0]['params'])
             else:
                 loss.backward()
                 if config.TRAIN.CLIP_GRAD:
@@ -1094,7 +1124,7 @@ def train_one_epoch(
                 inf_nan_to_num(loss_value_reduce, nan_value=-100., inf_value=-50.)
             )
             neptune_run["train/grad_norm"].append(
-                inf_nan_to_num(grad_norm_cpu,  nan_value=-100., inf_value=-50.)
+                inf_nan_to_num(grad_norm_cpu, nan_value=-100., inf_value=-50.)
             )
             neptune_run["train/lr"].append(lr)
 
@@ -1115,29 +1145,27 @@ def train_one_epoch(
 
 @torch.no_grad()
 def validate(
-    config,
-    data_loader,
-    model,
-    criterion,
-    neptune_run,
-    verbose: bool = True,
-    return_predictions: bool = False,
+        config,
+        data_loader,
+        model,
+        criterion,
+        neptune_run,
+        verbose: bool = True,
+        return_predictions: bool = False,
 ):
     model.eval()
     criterion.eval()
 
     batch_time = AverageMeter()
     loss_meter = AverageMeter()
-    cls_metrics: metrics.Metrics = metrics.Metrics(metrics=("auc", "ap", "accuracy"))
+    cls_metrics: metrics.Metrics = metrics.Metrics(metrics=("auc", "ap", "accuracy", "recall", "fnr"))
 
     predicted_scores: dict[int, tuple[float, Optional[AttentionMask]]] = {}
 
-
     end = time.time()
     for idx, (images, target, dataset_idx) in enumerate(data_loader):
-        #if config.DATA.AGGREGATION == "mean":
-            #images = images[0] 
-            
+        # if config.DATA.AGGREGATION == "mean":
+        # images = images[0]
 
         if isinstance(images, list):
             # In case of arbitrary resolution models the batch is provided as a list of tensors.
@@ -1151,30 +1179,35 @@ def validate(
         # Compute output.
         if isinstance(images, list) and config.TEST.EXPORT_IMAGE_PATCHES:
             export_dirs: list[pathlib.Path] = [
-                pathlib.Path(config.OUTPUT)/"images"/f"{dataset_idx.detach().cpu().tolist()[i]}"
+                pathlib.Path(config.OUTPUT) / "images" / f"{dataset_idx.detach().cpu().tolist()[i]}"
                 for i in range(len(dataset_idx))
             ]
             output, attention_masks = model(
                 images, config.MODEL.FEATURE_EXTRACTION_BATCH, export_dirs
             )
-        elif isinstance(images, list) and config.DATA.AGGREGATION != "mean":
+        elif isinstance(images, list) and config.DATA.AGGREGATION in ["first", "mamba"]:
             output = model(images, config.MODEL.FEATURE_EXTRACTION_BATCH)
             attention_masks = [None] * len(images)
         elif isinstance(images, list) and config.DATA.AGGREGATION == "mean":
             predictions: list[list[torch.Tensor]] = [[
-                model(image[:, i], config.MODEL.FEATURE_EXTRACTION_BATCH) for i in range(image.size(dim=1))] for image in images]
+                model(image[:, i], config.MODEL.FEATURE_EXTRACTION_BATCH) for i in range(image.size(dim=1))] for image
+                in images]
             # loss needs to be computed differently for this case
             num_frames = min([len(predictions[i]) for i in range(len(images))])
             index_min = np.argmin([len(predictions[i]) for i in range(len(images))])
             if num_frames < 5:
                 for _ in range(5 - num_frames):
                     predictions[index_min].append(predictions[index_min][0])
-            predictions_tensor = torch.stack([torch.stack(video, dim = 0) for video in predictions], dim = 0)
-            loss = torch.mean(torch.stack([criterion(predictions_tensor[:, i].squeeze(), target) for i in range(num_frames)]))
+            predictions_tensor = torch.stack([torch.stack(video, dim=0) for video in predictions], dim=0)
+            loss = torch.mean(
+                torch.stack([criterion(predictions_tensor[:, i].squeeze(), target) for i in range(num_frames)]))
             output = [[torch.sigmoid(frame) for frame in prediction] for prediction in predictions]
-            output = [torch.mean(torch.stack(video, dim = 0), dim = 0) for video in output]
-            output = torch.stack(output, dim = 0)
+            output = [torch.mean(torch.stack(video, dim=0), dim=0) for video in output]
+            output = torch.stack(output, dim=0)
             output = output.squeeze(2)
+        elif isinstance(images, list) and config.DATA.AGGREGATION in ["simple", "mamba"]:
+            output = model(images, config.MODEL.FEATURE_EXTRACTION_BATCH)
+            attention_masks = [None] * len(images)
         else:
             if images.size(dim=1) > 1:
                 predictions: list[torch.Tensor] = [
@@ -1227,11 +1260,13 @@ def validate(
     auc: float = metric_values["auc"].item()
     ap: float = metric_values["ap"].item()
     acc: float = metric_values["accuracy"].item()
+    recall: float = metric_values["recall"][1].item()
+    fnr: float = metric_values["fnr"].item()
 
     if return_predictions:
-        return acc, ap, auc, loss_meter.avg, predicted_scores
+        return acc, ap, auc, recall, fnr, loss_meter.avg, predicted_scores
     else:
-        return acc, ap, auc, loss_meter.avg
+        return acc, ap, auc, recall, fnr, loss_meter.avg 
 
 
 if __name__ == '__main__':

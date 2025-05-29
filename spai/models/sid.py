@@ -34,6 +34,478 @@ from . import utils
 from . import backbones
 from spai.utils import save_image_with_attention_overlay
 
+# original, gives cuda errors, not used: https://github.com/state-spaces/mamba
+# used: https://github.com/alxndrTL/mamba.py
+from mambapy.mamba import Mamba, MambaConfig
+
+class MambaPatchBasedMFViT(nn.Module):
+    def __init__(
+        self,
+        vit: Union[vision_transformer.VisionTransformer,
+                   backbones.CLIPBackbone,
+                   backbones.DINOv2Backbone],
+        features_processor: 'FrequencyRestorationEstimator',
+        mamba: 'Mamba',
+        cls_head: Optional[nn.Module],
+        masking_radius: int,
+        img_patch_size: int,
+        img_patch_stride: int,
+        cls_vector_dim: int,
+        num_heads: int,
+        attn_embed_dim: int,
+        dropout: float = .0,
+        frozen_backbone: bool = True,
+        minimum_patches: int = 0,
+        initialization_scope: str = "all"
+    ) -> None:
+        super().__init__()
+
+        self.mfvit = MFViT(
+            vit,
+            features_processor,
+            None,
+            masking_radius,
+            img_patch_size,
+            frozen_backbone=frozen_backbone,
+            initialization_scope=initialization_scope
+        )
+        self.mamba = mamba
+        self.frozen_backbone = frozen_backbone
+
+        self.img_patch_size: int = img_patch_size
+        self.img_patch_stride: int = img_patch_stride
+        self.minimum_patches: int = minimum_patches
+        self.cls_vector_dim: int = cls_vector_dim
+
+        # Cross-Attention with a learnable vector layers.
+        # FREEZE
+        dim_head: int = attn_embed_dim // num_heads
+        self.heads = num_heads
+        self.scale = dim_head ** -0.5
+        self.attend = nn.Softmax(dim=-1)
+        self.dropout = nn.Dropout(dropout)
+        self.to_kv = nn.Linear(cls_vector_dim, attn_embed_dim*2, bias=False)
+        self.to_kv.weight.requires_grad = not self.frozen_backbone
+        self.patch_aggregator = nn.Parameter(torch.zeros((num_heads, 1, attn_embed_dim//num_heads)), requires_grad=not self.frozen_backbone)
+        nn.init.trunc_normal_(self.patch_aggregator, std=.02)
+        self.to_out = nn.Sequential(
+            nn.Linear(attn_embed_dim, cls_vector_dim, bias=False),
+            nn.Dropout(dropout)
+        )
+        self.to_out[0].weight.requires_grad = not self.frozen_backbone
+
+        self.norm = nn.LayerNorm(cls_vector_dim)
+        self.cls_head = cls_head
+
+        if initialization_scope == "all":
+            self.apply(_init_weights)
+        elif initialization_scope == "local":
+            # Initialize only the newly added components, by excluding mfvit.
+            for m_name, m in self._modules.items():
+                if m_name == "mfvit":
+                    continue
+                else:
+                    m.apply(_init_weights)
+        else:
+            raise TypeError(f"Non-supported weight initialization type: {initialization_scope}")
+        
+        for name, param in self.named_parameters():
+            print(name,param.requires_grad)
+
+    def forward(
+        self,
+        x: Union[torch.Tensor, list[torch.Tensor]],
+        feature_extraction_batch_size: Optional[int] = None,
+        export_dirs: Optional[list[pathlib.Path]] = None,
+    ) -> Union[torch.Tensor, tuple[torch.Tensor, list['AttentionMask']]]:
+        """Forward pass of a batch of images.
+
+        The images should not have been normalized before and the value of each pixel should
+        lie in [0, 1].
+
+        :param x: B x C x H x W
+        :param feature_extraction_batch_size:
+        :param export_dirs:
+        """
+        if isinstance(x, torch.Tensor):
+            raise NotImplementedError("Mamba does not support input as a Tensor.")
+            # x = self.forward_batch(x)
+        elif isinstance(x, list):
+            if feature_extraction_batch_size is None:
+                feature_extraction_batch_size = len(x)
+            if export_dirs is not None:
+                raise NotImplementedError("Mamba does not support exporting during forward.")
+                # x = self.forward_arbitrary_resolution_batch_with_export(
+                #     x, feature_extraction_batch_size, export_dirs
+                # )
+            else:
+                x = self.forward_arbitrary_resolution_batch(x, feature_extraction_batch_size)
+        else:
+            raise TypeError('x must be a tensor or a list of tensors')
+
+        return x
+
+    def patches_attention(
+        self,
+        x: torch.Tensor,
+        return_attn: bool = False,
+        drop_bottom: bool = False,
+        drop_top: bool = False
+    ) -> torch.Tensor:
+        """Perform cross attention between a learnable vector and the patches of an image."""
+        aggregator: torch.Tensor = self.patch_aggregator.expand(x.size(0), -1, -1, -1)
+        kv = self.to_kv(x).chunk(2, dim=-1)
+        k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), kv)
+        dots = torch.matmul(aggregator, k.transpose(-1, -2)) * self.scale
+        attn = self.attend(dots)
+        attn = self.dropout(attn)
+        x = torch.matmul(attn, v)
+        x = rearrange(x, 'b h n d -> b n (h d)')
+        x = self.to_out(x)
+        x = x.squeeze(dim=1)
+        if return_attn:
+            return x, attn
+        else:
+            return x
+
+    def forward_arbitrary_resolution_batch(
+        self,
+        x: list[torch.Tensor],
+        feature_extraction_batch_size: int
+    ) -> torch.Tensor:
+        """Forward pass of a batch of images of different resolutions.
+
+        Batch size on the tensors should equal one.
+
+        :param x: list of T x C x H_i x W_i tensors, where i denote the i-th image in the list.
+        :param feature_extraction_batch_size:
+
+        :returns:  B x 1 tensor.
+        """
+        # Rearrange the patches from all videos and all frames into a single tensor.
+        # FREEZE
+        with torch.no_grad():
+            patched_videos: list[torch.Tensor] = []
+            for video in x:
+                patched_frames: list[torch.Tensor] = []
+                for frame in video:
+                    patched: torch.Tensor = utils.patchify_image(
+                        frame,
+                        (self.img_patch_size, self.img_patch_size),
+                        (self.img_patch_stride, self.img_patch_stride)
+                    )  # 1 x L_i x C x H x W
+                    if patched.size(1) < self.minimum_patches:
+                        patched: tuple[torch.Tensor, ...] = five_crop(
+                            frame, [self.img_patch_size, self.img_patch_size]
+                        )
+                        patched: torch.Tensor = torch.stack(patched, dim=1)
+                    patched_frames.append(patched)
+                patched_video = torch.cat(patched_frames, dim = 0) # T x L_i x C x H x W
+                patched_videos.append(patched_video)
+            num_frames: int = min([vid.shape[0] for vid in patched_videos])
+            x = [vid[:num_frames] for vid in patched_videos]
+            del patched_videos
+            img_patches_num: list[int] = [img.size(1) for img in x]
+            x = torch.cat(x, dim=1) # T x SUM(L_i) x C x H x W
+
+            # Process the patches in groups of feature_extraction_batch_size.
+            features: list[list[torch.Tensor]] = []
+            for t in range(0, x.size(0)):
+                features_t = []
+                for i in range(0, x.size(1), feature_extraction_batch_size):
+                    features_t.append(self.mfvit(x[t, i:i+feature_extraction_batch_size]))
+                features.append(features_t)
+
+            features = torch.stack([torch.stack(features_t, dim = 0) for features_t in features], dim = 0)
+
+            x = features.squeeze(1)  # T x SUM(L_i) x D
+            del features
+
+            # Attend to patches according to the image they belong to.
+            attended: list[list[torch.Tensor]] = []
+            for t in range(x.size(0)):
+                attended_t = []
+                processed_sum: int = 0
+                for i in img_patches_num:
+                    attended_t.append(self.patches_attention(x[t, processed_sum:processed_sum+i].unsqueeze(0)))
+                    processed_sum += i
+                attended.append(attended_t)
+
+            x = torch.stack([torch.cat(attended_t, dim = 0) for attended_t in attended], dim = 0) # T x B x D
+            del attended
+
+        x = x.transpose(0, 1) # B x T x D
+        x = self.mamba(x) # mamba layer to model sequence,
+        x = x.mean(dim=1) # mean pool time dimension. # B x D
+
+        # KEEP/REMOVE ?
+        x = self.norm(x)  # B x D
+
+        x = self.cls_head(x)  # B x 1
+
+        return x
+
+    def get_vision_transformer(self) -> vision_transformer.VisionTransformer:
+        return self.mfvit.get_vision_transformer()
+
+    def unfreeze_backbone(self) -> None:
+        self.frozen_backbone = False
+        self.mfvit.unfreeze_backbone()
+
+    def freeze_backbone(self) -> None:
+        self.frozen_backbone = True
+        self.mfvit.freeze_backbone()
+
+
+class PoolPatchBasedMFViT(nn.Module):
+    def __init__(
+        self,
+        vit: Union[vision_transformer.VisionTransformer,
+                   backbones.CLIPBackbone,
+                   backbones.DINOv2Backbone],
+        features_processor: 'FrequencyRestorationEstimator',
+        cls_head: Optional[nn.Module],
+        masking_radius: int,
+        img_patch_size: int,
+        img_patch_stride: int,
+        cls_vector_dim: int,
+        num_heads: int,
+        attn_embed_dim: int,
+        dropout: float = .0,
+        frozen_backbone: bool = True,
+        minimum_patches: int = 0,
+        initialization_scope: str = "all"
+    ) -> None:
+        super().__init__()
+
+        self.mfvit = MFViT(
+            vit,
+            features_processor,
+            None,
+            masking_radius,
+            img_patch_size,
+            frozen_backbone=frozen_backbone,
+            initialization_scope=initialization_scope
+        )
+
+        self.img_patch_size: int = img_patch_size
+        self.img_patch_stride: int = img_patch_stride
+        self.minimum_patches: int = minimum_patches
+        self.cls_vector_dim: int = cls_vector_dim
+        self.frozen_backbone = frozen_backbone
+
+        # Cross-Attention with a learnable vector layers.
+        # FREEZE
+        dim_head: int = attn_embed_dim // num_heads
+        self.heads = num_heads
+        self.scale = dim_head ** -0.5
+        self.attend = nn.Softmax(dim=-1)
+        self.dropout = nn.Dropout(dropout)
+        self.to_kv = nn.Linear(cls_vector_dim, attn_embed_dim*2, bias=False)
+        self.to_kv.weight.requires_grad = not self.frozen_backbone
+        self.patch_aggregator = nn.Parameter(torch.zeros((num_heads, 1, attn_embed_dim//num_heads)), requires_grad=not self.frozen_backbone)
+        nn.init.trunc_normal_(self.patch_aggregator, std=.02)
+        self.to_out = nn.Sequential(
+            nn.Linear(attn_embed_dim, cls_vector_dim, bias=False),
+            nn.Dropout(dropout)
+        )
+        self.to_out[0].weight.requires_grad = not self.frozen_backbone
+
+        self.norm = nn.LayerNorm(cls_vector_dim)
+        self.cls_head = cls_head
+
+        if initialization_scope == "all":
+            self.apply(_init_weights)
+        elif initialization_scope == "local":
+            # Initialize only the newly added components, by excluding mfvit.
+            for m_name, m in self._modules.items():
+                if m_name == "mfvit":
+                    continue
+                else:
+                    m.apply(_init_weights)
+        else:
+            raise TypeError(f"Non-supported weight initialization type: {initialization_scope}")
+
+    def forward(
+        self,
+        x: Union[torch.Tensor, list[torch.Tensor]],
+        feature_extraction_batch_size: Optional[int] = None,
+        export_dirs: Optional[list[pathlib.Path]] = None,
+    ) -> Union[torch.Tensor, tuple[torch.Tensor, list['AttentionMask']]]:
+        """Forward pass of a batch of images.
+
+        The images should not have been normalized before and the value of each pixel should
+        lie in [0, 1].
+
+        :param x: B x C x H x W
+        :param feature_extraction_batch_size:
+        :param export_dirs:
+        """
+        if isinstance(x, torch.Tensor):
+            raise NotImplementedError("Pooling does not support input as tensor")
+        elif isinstance(x, list):
+            if feature_extraction_batch_size is None:
+                feature_extraction_batch_size = len(x)
+            if export_dirs is not None:
+                raise NotImplementedError("Pooling does not support exporting patches")
+            else:
+                x = self.forward_arbitrary_resolution_batch(x, feature_extraction_batch_size)
+        else:
+            raise TypeError('x must be a list of tensors')
+
+        return x
+
+    def patches_attention(
+        self,
+        x: torch.Tensor,
+        return_attn: bool = False,
+        drop_bottom: bool = False,
+        drop_top: bool = False
+    ) -> torch.Tensor:
+        """Perform cross attention between a learnable vector and the patches of an image."""
+        aggregator: torch.Tensor = self.patch_aggregator.expand(x.size(0), -1, -1, -1)
+        kv = self.to_kv(x).chunk(2, dim=-1)
+        k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), kv)
+        dots = torch.matmul(aggregator, k.transpose(-1, -2)) * self.scale
+        attn = self.attend(dots)
+        attn = self.dropout(attn)
+        x = torch.matmul(attn, v)
+        x = rearrange(x, 'b h n d -> b n (h d)')
+        x = self.to_out(x)
+        x = x.squeeze(dim=1)
+        if return_attn:
+            return x, attn
+        else:
+            return x
+
+    def forward_arbitrary_resolution_batch(
+        self,
+        x: list[torch.Tensor],
+        feature_extraction_batch_size: int
+    ) -> torch.Tensor:
+        """Forward pass of a batch of images of different resolutions.
+
+        Batch size on the tensors should equal one.
+
+        :param x: list of T x C x H_i x W_i tensors, where i denote the i-th image in the list.
+        :param feature_extraction_batch_size:
+
+        :returns:  B x 1 tensor.
+        """
+        # Rearrange the patches from all videos and all frames into a single tensor.
+        # FREEZE
+        with torch.no_grad():
+            patched_videos: list[torch.Tensor] = []
+            for video in x:
+                video = video.squeeze(0)
+                patched_frames: list[torch.Tensor] = []
+                for frame in video:
+                    frame = frame.unsqueeze(0)
+                    patched: torch.Tensor = utils.patchify_image(
+                        frame,
+                        (self.img_patch_size, self.img_patch_size),
+                        (self.img_patch_stride, self.img_patch_stride)
+                    )  # 1 x L_i x C x H x W
+                    if patched.size(1) < self.minimum_patches:
+                        patched: tuple[torch.Tensor, ...] = five_crop(
+                            frame, [self.img_patch_size, self.img_patch_size]
+                        )
+                        patched: torch.Tensor = torch.stack(patched, dim=1)
+                    patched_frames.append(patched)
+                patched_video = torch.cat(patched_frames, dim = 0) # T x L_i x C x H x W
+                patched_videos.append(patched_video)
+            num_frames: int = min([vid.shape[0] for vid in patched_videos])
+            x = [vid[:num_frames] for vid in patched_videos]
+            del patched_videos
+            img_patches_num: list[int] = [img.size(1) for img in x]
+            x = torch.cat(x, dim=1) # T x SUM(L_i) x C x H x W
+
+            # Process the patches in groups of feature_extraction_batch_size.
+            features: list[list[torch.Tensor]]= []
+            for t in range(0, x.size(0)):
+                features_t = []
+                for i in range(0, x.size(1), feature_extraction_batch_size):
+                    features_t.append(self.mfvit(x[t, i:i+feature_extraction_batch_size]))
+                features.append(features_t)
+
+            features = torch.stack([torch.stack(features_t, dim = 0) for features_t in features], dim = 0)
+
+            x = features.squeeze(1) # T x SUM(L_i) x D
+            del features
+
+            # Attend to patches according to the image they belong to.
+            attended: list[list[torch.Tensor]] = []
+            for t in range(x.size(0)):
+                attended_t = []
+                processed_sum: int = 0
+                for i in img_patches_num:
+                    attended_t.append(self.patches_attention(x[t, processed_sum:processed_sum+i].unsqueeze(0)))
+                    processed_sum += i
+                attended.append(attended_t)
+
+        # mean pooling over time
+        x = torch.stack([torch.cat(attended_t, dim = 0) for attended_t in attended], dim = 0).mean(dim = 0) # B x D
+        del attended
+
+        x = self.norm(x)  # B x D
+        x = self.cls_head(x)  # B x 1
+
+        return x
+
+    def get_vision_transformer(self) -> vision_transformer.VisionTransformer:
+        return self.mfvit.get_vision_transformer()
+
+    def unfreeze_backbone(self) -> None:
+        self.mfvit.unfreeze_backbone()
+
+    def freeze_backbone(self) -> None:
+        self.mfvit.freeze_backbone()
+
+    def export_onnx_patch_aggregator(self, export_file: pathlib.Path) -> None:
+        # Export the spectral context attention and the classifier.
+        outer_instance = self
+        class SCAClassifier(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.outer_instance = outer_instance
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                """Input size: B x L x D"""
+                x = self.outer_instance.patches_attention(x)  # B x D
+                x = self.outer_instance.norm(x)  # B x D
+                x = self.outer_instance.cls_head(x)  # B x 1
+                return x
+        model: SCAClassifier = SCAClassifier()
+        x: torch.Tensor = torch.rand((3, 4, outer_instance.cls_vector_dim))
+        torch._dynamo.mark_dynamic(x, 0)
+        torch._dynamo.mark_dynamic(x, 1)
+        # onnx_options: torch.onnx.ExportOptions = torch.onnx.ExportOptions(dynamic_shapes=True)
+        # onnx_program: torch.onnx.ONNXProgram = torch.onnx.dynamo_export(
+        #     model, x, export_options=onnx_options
+        # )
+        batch_dim: torch.export.Dim = torch.export.Dim("batch_size")
+        seq_dim: torch.export.Dim = torch.export.Dim("seq_dim")
+        ep: torch.export.ExportedProgram = torch.export.export(
+            model,
+            args=(x,),
+            dynamic_shapes={
+                "x": {0: batch_dim, 1: seq_dim},
+            }
+        )
+        onnx_program = torch.onnx.export(ep, dynamo=True, report=True, verify=True)
+        onnx_program.save(str(export_file))
+
+    def export_onnx(
+        self,
+        patch_encoder: pathlib.Path,
+        patch_aggregator: pathlib.Path,
+        include_fft_preprocessing: bool = True,
+    ) -> None:
+        if include_fft_preprocessing:
+            self.mfvit.export_onnx(patch_encoder)
+        else:
+            self.mfvit.export_onnx_without_fft(patch_encoder)
+        self.export_onnx_patch_aggregator(patch_aggregator)
+
 
 class PatchBasedMFViT(nn.Module):
     def __init__(
@@ -116,7 +588,7 @@ class PatchBasedMFViT(nn.Module):
         :param export_dirs:
         """
         if isinstance(x, torch.Tensor):
-            x =  self.forward_batch(x)
+            x = self.forward_batch(x)
         elif isinstance(x, list):
             if feature_extraction_batch_size is None:
                 feature_extraction_batch_size = len(x)
@@ -155,20 +627,21 @@ class PatchBasedMFViT(nn.Module):
             return x
 
     def forward_batch(self, x: torch.Tensor) -> torch.Tensor:
-        x = utils.patchify_image(
-            x,
-            (self.img_patch_size, self.img_patch_size),
-            (self.img_patch_stride, self.img_patch_stride)
-        )  # B x L x C x H x W
+        with torch.no_grad():
+            x = utils.patchify_image(
+                x,
+                (self.img_patch_size, self.img_patch_size),
+                (self.img_patch_stride, self.img_patch_stride)
+            )  # B x L x C x H x W
 
-        patch_features: list[torch.Tensor] = []
-        for i in range(x.size(1)):
-            patch_features.append(self.mfvit(x[:, i]))
-        x = torch.stack(patch_features, dim=1)  # B x L x D
-        del patch_features
+            patch_features: list[torch.Tensor] = []
+            for i in range(x.size(1)):
+                patch_features.append(self.mfvit(x[:, i]))
+            x = torch.stack(patch_features, dim=1)  # B x L x D
+            del patch_features
 
-        x = self.patches_attention(x)  # B x D
-        x = self.norm(x)  # B x D
+            x = self.patches_attention(x)  # B x D
+            x = self.norm(x)  # B x D
         x = self.cls_head(x)  # B x 1
 
         return x
@@ -188,50 +661,53 @@ class PatchBasedMFViT(nn.Module):
         :returns: A B x 1 tensor.
         """
         # Rearrange the patches from all images into a single tensor.
-        patched_images: list[torch.Tensor] = []
-        for img in x:
-            patched: torch.Tensor = utils.patchify_image(
-                img,
-                (self.img_patch_size, self.img_patch_size),
-                (self.img_patch_stride, self.img_patch_stride)
-            )  # 1 x L_i x C x H x W
-            if patched.size(1) < self.minimum_patches:
-                patched: tuple[torch.Tensor, ...] = five_crop(
-                    img, [self.img_patch_size, self.img_patch_size]
-                )
-                patched: torch.Tensor = torch.stack(patched, dim=1)
-            patched_images.append(patched)
-        x = patched_images
-        del patched_images
-        # x = [
-        #     utils.patchify_image(
-        #         img,
-        #         (self.img_patch_size, self.img_patch_size),
-        #         (self.img_patch_stride, self.img_patch_stride)
-        #     )  # 1 x L_i x C x H x W
-        #     for img in x
-        # ]
-        img_patches_num: list[int] = [img.size(1) for img in x]
-        x = torch.cat(x, dim=1)  # 1 x SUM(L_i) x C x H x W
-        x = x.squeeze(dim=0)  # SUM(L_i) x C x H x W
+        # FREEZE
+        with torch.no_grad():
+            patched_images: list[torch.Tensor] = []
+            for img in x:
+                patched: torch.Tensor = utils.patchify_image(
+                    img,
+                    (self.img_patch_size, self.img_patch_size),
+                    (self.img_patch_stride, self.img_patch_stride)
+                )  # 1 x L_i x C x H x W
+                if patched.size(1) < self.minimum_patches:
+                    patched: tuple[torch.Tensor, ...] = five_crop(
+                        img, [self.img_patch_size, self.img_patch_size]
+                    )
+                    patched: torch.Tensor = torch.stack(patched, dim=1)
+                patched_images.append(patched)
+            x = patched_images
+            del patched_images
+            # x = [
+            #     utils.patchify_image(
+            #         img,
+            #         (self.img_patch_size, self.img_patch_size),
+            #         (self.img_patch_stride, self.img_patch_stride)
+            #     )  # 1 x L_i x C x H x W
+            #     for img in x
+            # ]
+            img_patches_num: list[int] = [img.size(1) for img in x]
+            x = torch.cat(x, dim=1)  # 1 x SUM(L_i) x C x H x W
+            x = x.squeeze(dim=0)  # SUM(L_i) x C x H x W
 
-        # Process the patches in groups of feature_extraction_batch_size.
-        features: list[torch.Tensor] = []
-        for i in range(0, x.size(0), feature_extraction_batch_size):
-            features.append(self.mfvit(x[i:i+feature_extraction_batch_size]))
-        x = torch.cat(features, dim=0)  # SUM(L_i) x D
-        del features
+            # Process the patches in groups of feature_extraction_batch_size.
+            features: list[torch.Tensor] = []
+            for i in range(0, x.size(0), feature_extraction_batch_size):
+                features.append(self.mfvit(x[i:i+feature_extraction_batch_size]))
+            x = torch.cat(features, dim=0)  # SUM(L_i) x D
+            del features
 
-        # Attend to patches according to the image they belong to.
-        attended: list[torch.Tensor] = []
-        processed_sum: int = 0
-        for i in img_patches_num:
-            attended.append(self.patches_attention(x[processed_sum:processed_sum+i].unsqueeze(0)))
-            processed_sum += i
-        x = torch.cat(attended, dim=0)  # B x D
-        del attended
+            # Attend to patches according to the image they belong to.
+            attended: list[torch.Tensor] = []
+            processed_sum: int = 0
+            for i in img_patches_num:
+                attended.append(self.patches_attention(x[processed_sum:processed_sum+i].unsqueeze(0)))
+                processed_sum += i
+            x = torch.cat(attended, dim=0)  # B x D
+            del attended
 
-        x = self.norm(x)  # B x D
+            x = self.norm(x)  # B x D
+        
         x = self.cls_head(x)  # B x 1
 
         return x
@@ -471,12 +947,14 @@ class MFViT(nn.Module):
         hi_freq = self.backbone_norm(hi_freq)
 
         if self.frozen_backbone:
+            # FREEZE
             with torch.no_grad():
                 x, low_freq, hi_freq = self._extract_features(x, low_freq, hi_freq)
+                x = self.features_processor(x, low_freq, hi_freq)
         else:
             x, low_freq, hi_freq = self._extract_features(x, low_freq, hi_freq)
+            x = self.features_processor(x, low_freq, hi_freq)
 
-        x = self.features_processor(x, low_freq, hi_freq)
         if self.cls_head is not None:
             x = self.cls_head(x)
 
@@ -514,10 +992,11 @@ class MFViT(nn.Module):
         if self.frozen_backbone:
             with torch.no_grad():
                 x, low_freq, hi_freq = self._extract_features(x, low_freq, hi_freq)
+            x = self.features_processor(x, low_freq, hi_freq)
         else:
             x, low_freq, hi_freq = self._extract_features(x, low_freq, hi_freq)
+            x = self.features_processor(x, low_freq, hi_freq)
 
-        x = self.features_processor(x, low_freq, hi_freq)
         if self.cls_head is not None:
             x = self.cls_head(x)
 
@@ -680,10 +1159,12 @@ class ClassificationVisionTransformer(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.frozen_backbone:
             with torch.no_grad():
+                # FREEZE
                 x = self.vit(x)
+                x = self.features_processor(x)
         else:
             x = self.vit(x)
-        x = self.features_processor(x)
+            x = self.features_processor(x)
         if self.cls_head is not None:
             x = self.cls_head(x)
         return x
@@ -1193,6 +1674,7 @@ def build_mf_vit(config) -> MFViT:
     else:
         raise RuntimeError(f"Unsupported ViT weights type: {config.MODEL_WEIGHTS}")
 
+
     # Build features processor.
     fre: FrequencyRestorationEstimator = FrequencyRestorationEstimator(
         features_num=len(config.MODEL.VIT.INTERMEDIATE_LAYERS),
@@ -1227,6 +1709,7 @@ def build_mf_vit(config) -> MFViT:
     else:
         raise RuntimeError(f"Unsupported train mode: {config.TRAIN.MODE}")
 
+
     if config.MODEL.RESOLUTION_MODE == "fixed":
         model = MFViT(
             vit,
@@ -1236,20 +1719,63 @@ def build_mf_vit(config) -> MFViT:
             img_size=config.DATA.IMG_SIZE
         )
     elif config.MODEL.RESOLUTION_MODE == "arbitrary":
-        model = PatchBasedMFViT(
-            vit,
-            fre,
-            cls_head,
-            masking_radius=config.MODEL.FRE.MASKING_RADIUS,
-            img_patch_size=config.DATA.IMG_SIZE,
-            img_patch_stride=config.MODEL.PATCH_VIT.PATCH_STRIDE,
-            cls_vector_dim=cls_vector_dim,
-            attn_embed_dim=config.MODEL.PATCH_VIT.ATTN_EMBED_DIM,
-            num_heads=config.MODEL.PATCH_VIT.NUM_HEADS,
-            dropout=config.MODEL.SID_DROPOUT,
-            minimum_patches=config.MODEL.PATCH_VIT.MINIMUM_PATCHES,
-            initialization_scope=initialization_scope
-        )
+        if config.DATA.AGGREGATION == "simple":
+            model = PoolPatchBasedMFViT(
+                vit,
+                fre,
+                cls_head,
+                masking_radius=config.MODEL.FRE.MASKING_RADIUS,
+                img_patch_size=config.DATA.IMG_SIZE,
+                img_patch_stride=config.MODEL.PATCH_VIT.PATCH_STRIDE,
+                cls_vector_dim=cls_vector_dim,
+                attn_embed_dim=config.MODEL.PATCH_VIT.ATTN_EMBED_DIM,
+                num_heads=config.MODEL.PATCH_VIT.NUM_HEADS,
+                dropout=config.MODEL.SID_DROPOUT,
+                minimum_patches=config.MODEL.PATCH_VIT.MINIMUM_PATCHES,
+                initialization_scope=initialization_scope
+            )
+        elif config.DATA.AGGREGATION == "mamba":
+            mamba_config = MambaConfig(d_model=cls_vector_dim, n_layers=1)
+            mamba = Mamba(mamba_config)
+
+            # TODO ugly code but works?
+            cls_head_mamba = ClassificationHead(
+                input_dim=cls_vector_dim,
+                num_classes=config.MODEL.NUM_CLASSES if config.MODEL.NUM_CLASSES > 2 else 1,
+                mlp_ratio=config.MODEL.CLS_HEAD.MLP_RATIO,
+                dropout=config.MODEL.SID_DROPOUT
+            )
+
+            model = MambaPatchBasedMFViT(
+                vit,
+                fre,
+                mamba,
+                cls_head_mamba,
+                masking_radius=config.MODEL.FRE.MASKING_RADIUS,
+                img_patch_size=config.DATA.IMG_SIZE,
+                img_patch_stride=config.MODEL.PATCH_VIT.PATCH_STRIDE,
+                cls_vector_dim=cls_vector_dim,
+                attn_embed_dim=config.MODEL.PATCH_VIT.ATTN_EMBED_DIM,
+                num_heads=config.MODEL.PATCH_VIT.NUM_HEADS,
+                dropout=config.MODEL.SID_DROPOUT,
+                minimum_patches=config.MODEL.PATCH_VIT.MINIMUM_PATCHES,
+                initialization_scope=initialization_scope
+            )
+        else:
+            model = PatchBasedMFViT(
+                vit,
+                fre,
+                cls_head,
+                masking_radius=config.MODEL.FRE.MASKING_RADIUS,
+                img_patch_size=config.DATA.IMG_SIZE,
+                img_patch_stride=config.MODEL.PATCH_VIT.PATCH_STRIDE,
+                cls_vector_dim=cls_vector_dim,
+                attn_embed_dim=config.MODEL.PATCH_VIT.ATTN_EMBED_DIM,
+                num_heads=config.MODEL.PATCH_VIT.NUM_HEADS,
+                dropout=config.MODEL.SID_DROPOUT,
+                minimum_patches=config.MODEL.PATCH_VIT.MINIMUM_PATCHES,
+                initialization_scope=initialization_scope
+            )
     else:
         raise RuntimeError(f"Unsupported resolution mode: {config.MODEL.RESOLUTION_MODE}")
 

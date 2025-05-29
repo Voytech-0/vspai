@@ -31,7 +31,8 @@ _C.BASE = ['']
 _C.DATA = CN()
 # Data type - image or video
 _C.DATA.TYPE = "image"
-# Data aggregation for video: "first" for first frame or "mean" for mean along all frames
+# Data aggregation for video: "first" for first frame or "mean" for mean along 5 random frames
+# "simple" performs mean pooling for all frames within MFViT
 _C.DATA.AGGREGATION = "first"
 # Batch size for a single GPU, could be overwritten by command line argument
 _C.DATA.BATCH_SIZE = 128
