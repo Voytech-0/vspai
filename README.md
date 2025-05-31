@@ -20,6 +20,14 @@ images under a self-supervised setup. Then, using the spectral
 reconstruction similarity it detects AI-generated images as out-of-distribution 
 samples of this learned model.**
 
+### SPAV
+To apply to videos select video data type and frame aggregation method (simple, mamba, pooling) in the arguments.
+
+```bash
+--data_type video
+--aggregation simple
+```
+
 ### :newspaper: News
 
 - 28/03/25: Code released.
